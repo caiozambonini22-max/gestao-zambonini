@@ -119,6 +119,18 @@ select option{background:var(--sf2);}
 #loading-screen{position:fixed;inset:0;background:#0d0d0d;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;gap:16px;}
 #loading-screen .logo-l{font-size:28px;font-weight:800;color:#f97316;letter-spacing:2px;}
 #loading-screen .sub-l{font-size:12px;color:#555;}
+
+.login-screen{position:fixed;inset:0;background:#0d0d0d;display:flex;align-items:center;justify-content:center;z-index:9999;}
+.login-box{background:var(--sf);border:1px solid var(--bdb);border-radius:16px;padding:40px;width:380px;text-align:center;}
+.login-logo{font-size:22px;font-weight:800;color:var(--or);letter-spacing:2px;margin-bottom:4px;}
+.login-sub{font-size:11px;color:var(--txd);margin-bottom:32px;letter-spacing:1px;}
+.login-field{text-align:left;margin-bottom:14px;}
+.login-field label{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--txm);text-transform:uppercase;display:block;margin-bottom:5px;}
+.login-field input{width:100%;background:var(--sf3);border:1px solid var(--bd);border-radius:8px;padding:11px 14px;color:var(--tx);font-size:14px;font-family:inherit;outline:none;transition:border-color .15s;}
+.login-field input:focus{border-color:var(--or);}
+.login-btn{width:100%;background:var(--or);color:#fff;border:none;border-radius:8px;padding:13px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;margin-top:8px;transition:background .15s;}
+.login-btn:hover{background:var(--orl);}
+.login-err{color:var(--rd);font-size:12px;margin-top:10px;min-height:18px;}
 </style>
 </head>
 <body>
@@ -141,7 +153,7 @@ select option{background:var(--sf2);}
     <button class="ni" onclick="setTab('cadastros')" id="nav-cadastros">👥 Cadastros</button>
     <button class="ni" onclick="setTab('metricas')" id="nav-metricas">📊 Metricas</button>
     <button class="ni" onclick="setTab('config')" id="nav-config">Config</button>
-    <div class="topnav-r">
+    <div class="topnav-r"><button class="btn bg2 sm" onclick="logout()" style="font-size:11px;padding:4px 10px">Sair</button>
       <span id="sync-status" style="font-size:11px;color:var(--txd);display:flex;align-items:center;gap:5px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-txt">Sincronizado</span></span>
     </div>
   </nav>
@@ -250,6 +262,76 @@ async function buscarCEP(cep, callback){
     if(d.erro)return;
     callback({street:d.logradouro||'',bairro:d.bairro||'',city:d.localidade||'',state:d.uf||'',cep:c});
   }catch(e){}
+}
+
+// ============ AUTH ============
+const SESSION_KEY = 'zb_session';
+const SESSION_HOURS = 24;
+const DEFAULT_PASS = 'zambonini123';
+
+function checkSession(){
+  try{
+    const s = localStorage.getItem(SESSION_KEY);
+    if(!s)return false;
+    const d = JSON.parse(s);
+    if(!d.ts)return false;
+    const hours = (Date.now()-d.ts)/(1000*60*60);
+    return hours < SESSION_HOURS;
+  }catch{return false;}
+}
+
+function saveSession(){
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ts:Date.now()}));
+}
+
+function logout(){
+  localStorage.removeItem(SESSION_KEY);
+  showLoginScreen();
+}
+
+function getPassword(){
+  return localStorage.getItem('zb_password')||DEFAULT_PASS;
+}
+
+function showLoginScreen(){
+  document.getElementById('loading-screen').style.display='none';
+  document.getElementById('app').style.display='none';
+  let loginEl = document.getElementById('login-screen');
+  if(!loginEl){
+    loginEl = document.createElement('div');
+    loginEl.id = 'login-screen';
+    loginEl.className = 'login-screen';
+    document.body.appendChild(loginEl);
+  }
+  loginEl.innerHTML = `
+    <div class="login-box">
+      <div class="login-logo">⚡ GESTAO ZAMBONINI</div>
+      <div class="login-sub">Sistema de Gestao de Vendas</div>
+      <div class="login-field">
+        <label>Senha de acesso</label>
+        <input type="password" id="login-pass" placeholder="Digite sua senha..." onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <button class="login-btn" onclick="doLogin()">Entrar</button>
+      <div class="login-err" id="login-err"></div>
+      <div style="margin-top:20px;font-size:10px;color:var(--txd)">Sessao de 24 horas · Dados salvos no Supabase</div>
+    </div>
+  `;
+  setTimeout(()=>{const i=document.getElementById('login-pass');if(i)i.focus();},100);
+}
+
+function doLogin(){
+  const pass = document.getElementById('login-pass').value;
+  const err = document.getElementById('login-err');
+  if(pass === getPassword()){
+    saveSession();
+    document.getElementById('login-screen').remove();
+    document.getElementById('loading-screen').style.display='flex';
+    if(checkSession()){loadAll();}else{showLoginScreen();}
+  } else {
+    err.textContent = 'Senha incorreta. Tente novamente.';
+    document.getElementById('login-pass').value='';
+    document.getElementById('login-pass').focus();
+  }
 }
 async function loadAll(){
   document.getElementById('loading-msg').textContent='Carregando dados...';
@@ -1680,6 +1762,19 @@ async function syncMetaAds(){
   }catch(e){setSyncStatus('error');alert('Erro ao conectar com Meta Ads. Verifique o token.');}
 }
 
+
+function changePassword(){
+  const np = document.getElementById('new-pass').value;
+  const cp = document.getElementById('conf-pass').value;
+  const msg = document.getElementById('pass-msg');
+  if(!np||np.length<4){msg.style.color='var(--rd)';msg.textContent='Senha deve ter pelo menos 4 caracteres.';return;}
+  if(np!==cp){msg.style.color='var(--rd)';msg.textContent='Senhas nao coincidem.';return;}
+  localStorage.setItem('zb_password',np);
+  msg.style.color='var(--gr)';msg.textContent='Senha alterada com sucesso!';
+  document.getElementById('new-pass').value='';
+  document.getElementById('conf-pass').value='';
+  setTimeout(()=>{if(msg)msg.textContent='';},3000);
+}
 // ============ INIT ============
 loadAll();
 </script>
@@ -1742,6 +1837,14 @@ function renderCadastros(){
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn bp sm" onclick="openMaqModal(null)">+ Nova Maquininha</button></div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">${maqCards}</div>`;
   }
 
+  content += `<div class="card" style="margin-top:16px"><div class="sl">Segurança</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:400px">
+      <div class="field"><label>Nova Senha</label><input type="password" id="new-pass" placeholder="Digite nova senha..."></div>
+      <div class="field"><label>Confirmar</label><input type="password" id="conf-pass" placeholder="Repita a senha..."></div>
+    </div>
+    <button class="btn bp sm" style="margin-top:10px" onclick="changePassword()">Salvar Senha</button>
+    <div id="pass-msg" style="font-size:11px;margin-top:6px"></div>
+  </div>`;
   return `<div style="display:flex;gap:6px;margin-bottom:16px">${tabBtns}</div>${content}`;
 }
 
