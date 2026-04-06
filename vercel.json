@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/", "destination": "/gestao-zambonini (7).html" }
+  ]
+}
