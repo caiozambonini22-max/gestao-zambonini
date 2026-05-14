@@ -1780,13 +1780,90 @@ function saveSup(existingId){
 
 // ============ PRODUTOS ============
 let prodSearch='';
+let prodExpanded=new Set();
+function toggleProdExpand(id){if(prodExpanded.has(id)){prodExpanded.delete(id);}else{prodExpanded.add(id);}render();}
+
 function renderProdutos(){
   const filtered=state.prods.filter(p=>p.name.toLowerCase().includes(prodSearch.toLowerCase())||(p.sku||'').toLowerCase().includes(prodSearch.toLowerCase()));
   let rows='';
-  filtered.forEach(p=>{const si=state.stock.find(s=>s.productId===p.id);const mg=p.salePrice>0?((p.salePrice-p.costPrice)/p.salePrice)*100:0;const qty=si?si.quantity:0;const tipoIcon=p.tipo==='variacao'?'🎨':p.tipo==='kit'?'🎁':'📦';const tipoLbl=p.tipo==='variacao'?'Variacao':p.tipo==='kit'?'Kit':'Simples';rows+=`<tr><td><div style="display:flex;align-items:center;gap:7px"><span style="font-size:14px">${tipoIcon}</span><div><div style="font-weight:600">${esc(p.name)}</div>${p.brand?`<div style="font-size:10px;color:var(--txd)">${esc(p.brand)}</div>`:''}
-${p.tipo==='variacao'&&p.variacoes&&p.variacoes.length>0?`<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">${p.variacoes.map(v=>`<span style="font-size:9px;padding:1px 5px;background:var(--ordim);border:1px solid var(--bdb);border-radius:10px;color:var(--or)">${esc(v.nome)}: ${(v.opcoes||[]).join(', ')}</span>`).join('')}</div>`:''}${p.tipo==='kit'&&p.kitItems&&p.kitItems.length>0?`<div style="font-size:10px;color:var(--txd);margin-top:2px">${p.kitItems.length} itens no kit</div>`:''}
-</div></div></td><td><span class="badge b-bl">${esc(p.sku||'—')}</span></td><td style="font-size:10px;color:var(--txd)">${esc(p.ncm||'—')}</td><td style="color:var(--txm)">${fmtBRL(p.costPrice)}</td><td style="color:${si&&si.avgCost>0?'var(--or)':'var(--txd)'};font-weight:${si&&si.avgCost>0?600:400}">${si&&si.avgCost>0?fmtBRL(si.avgCost):'—'}</td><td style="color:var(--or);font-weight:600">${fmtBRL(p.salePrice)}</td><td><span class="${mg>=20?'badge b-gr':mg>0?'badge b-or':'badge b-rd'}">${fmtPct(mg)}</span></td><td><span class="${qty>5?'s-ok':qty>0?'s-low':'s-zero'}">${qty}</span></td><td><span class="badge b-or">${tipoLbl}</span></td><td><div style="display:flex;gap:5px"><button class="btn bg2 sm" onclick="openProdModal('${p.id}')">Edit</button><button class="btn bd2 sm" onclick="deleteProd('${p.id}')">×</button></div></td></tr>`;});
-  return `<div style="display:flex;gap:10px;margin-bottom:16px"><input placeholder="Buscar..." value="${esc(prodSearch)}" oninput="prodSearch=this.value;render()" style="flex:1"><button class="btn bp" onclick="openProdModal(null)">+ Novo Produto</button></div><div class="card" style="padding:0;overflow:hidden">${filtered.length===0?'<div class="empty"><div class="empty-ic">📦</div><p>Nenhum produto</p></div>':`<div class="tw"><table><thead><tr><th>Produto</th><th>SKU</th><th>NCM</th><th>Custo</th><th>C.Medio</th><th>Venda</th><th>Margem</th><th>Estoque</th><th>Tipo</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`}</div>`;
+  filtered.forEach(p=>{
+    const s=getStockForProd(p);
+    const si=state.stock.find(x=>x.productId===p.id);
+    const mg=p.salePrice>0?((p.salePrice-p.costPrice)/p.salePrice)*100:0;
+    const qty=s.quantity||0;
+    const tipoIcon=p.tipo==='variacao'?'🎨':p.tipo==='kit'?'🎁':'📦';
+    const tipoLbl=p.tipo==='variacao'?'Variacao':p.tipo==='kit'?'Kit':'Simples';
+    const hasVars=p.tipo==='variacao'&&s.variations&&s.variations.length>0;
+    const expanded=prodExpanded.has(p.id);
+
+    // Linha principal do produto
+    rows+=`<tr style="cursor:${hasVars?'pointer':'default'}" ${hasVars?`onclick="toggleProdExpand('${p.id}')"`:''}><td>
+      <div style="display:flex;align-items:center;gap:7px">
+        <span style="font-size:11px;color:var(--or);display:inline-block;transform:rotate(${expanded?'90':'0'}deg);transition:transform .2s;min-width:14px">${hasVars?'▶':'　'}</span>
+        <span style="font-size:14px">${tipoIcon}</span>
+        <div>
+          <div style="font-weight:600">${esc(p.name)}</div>
+          ${p.brand?`<div style="font-size:10px;color:var(--txd)">${esc(p.brand)}</div>`:''}
+          ${hasVars?`<div style="font-size:10px;color:var(--txd);margin-top:2px">${s.variations.length} variações — clique para expandir</div>`:''}
+          ${p.tipo==='variacao'&&p.variacoes&&p.variacoes.length>0&&!hasVars?`<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px">${p.variacoes.map(v=>`<span style="font-size:9px;padding:1px 5px;background:var(--ordim);border:1px solid var(--bdb);border-radius:10px;color:var(--or)">${esc(v.nome)}: ${(v.opcoes||[]).join(', ')}</span>`).join('')}</div>`:''}
+          ${p.tipo==='kit'&&p.kitItems&&p.kitItems.length>0?`<div style="font-size:10px;color:var(--txd);margin-top:2px">${p.kitItems.length} itens no kit</div>`:''}
+        </div>
+      </div>
+    </td>
+    <td><span class="badge b-bl">${esc(p.sku||'—')}</span></td>
+    <td style="font-size:10px;color:var(--txd)">${esc(p.ncm||'—')}</td>
+    <td style="color:var(--txm)">${fmtBRL(p.costPrice)}</td>
+    <td style="color:${si&&si.avgCost>0?'var(--or)':'var(--txd)'};font-weight:${si&&si.avgCost>0?600:400}">${si&&si.avgCost>0?fmtBRL(si.avgCost):'—'}</td>
+    <td style="color:var(--or);font-weight:600">${fmtBRL(p.salePrice)}</td>
+    <td><span class="${mg>=20?'badge b-gr':mg>0?'badge b-or':'badge b-rd'}">${fmtPct(mg)}</span></td>
+    <td><span class="${qty>5?'s-ok':qty>0?'s-low':'s-zero'}">${qty}</span></td>
+    <td><span class="badge b-or">${tipoLbl}</span></td>
+    <td onclick="event.stopPropagation()"><div style="display:flex;gap:5px">
+      <button class="btn bg2 sm" onclick="openProdModal('${p.id}')">Edit</button>
+      <button class="btn bd2 sm" onclick="deleteProd('${p.id}')">×</button>
+    </div></td></tr>`;
+
+    // Sub-linhas das variações quando expandido
+    if(expanded&&hasVars){
+      s.variations.forEach(v=>{
+        const vq=Number(v.quantity||0);
+        const vClass=vq>5?'s-ok':vq>0?'s-low':'s-zero';
+        rows+=`<tr style="background:rgba(249,115,22,.04)" onclick="event.stopPropagation()">
+          <td style="padding-left:52px;color:var(--txm);font-size:12px" colspan="7">
+            <span style="color:var(--sf4);margin-right:6px">└</span>
+            <strong style="color:var(--tx)">${esc(v.name)}</strong>
+            <span style="margin-left:12px;color:var(--txd)">Estoque:</span>
+            <span class="${vClass}" style="margin-left:6px">${vq} un.</span>
+          </td>
+          <td colspan="2">
+            <div style="display:flex;align-items:center;gap:5px">
+              <div style="display:flex;align-items:center;background:var(--sf3);border:1px solid var(--bd);border-radius:6px;overflow:hidden">
+                <button onclick="saveVarQty('${p.id}','${v.id}',${Math.max(0,vq-1)})" style="background:none;border:none;color:var(--txm);cursor:pointer;padding:2px 8px;font-size:15px">−</button>
+                <input type="number" value="${vq}" min="0"
+                  onchange="saveVarQty('${p.id}','${v.id}',this.value)"
+                  onclick="event.stopPropagation();this.select()"
+                  style="width:44px;background:transparent;border:none;color:var(--tx);text-align:center;font-size:12px;font-weight:700;padding:3px 0;outline:none">
+                <button onclick="saveVarQty('${p.id}','${v.id}',${vq+1})" style="background:none;border:none;color:var(--or);cursor:pointer;padding:2px 8px;font-size:15px">+</button>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      });
+    }
+  });
+
+  return `<div style="display:flex;gap:10px;margin-bottom:16px">
+    <input placeholder="Buscar..." value="${esc(prodSearch)}" oninput="prodSearch=this.value;render()" style="flex:1">
+    <button class="btn bp" onclick="openProdModal(null)">+ Novo Produto</button>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    ${filtered.length===0
+      ?'<div class="empty"><div class="empty-ic">📦</div><p>Nenhum produto</p></div>'
+      :`<div class="tw"><table>
+        <thead><tr><th>Produto</th><th>SKU</th><th>NCM</th><th>Custo</th><th>C.Medio</th><th>Venda</th><th>Margem</th><th>Estoque</th><th>Tipo</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`}
+  </div>`;
 }
 function deleteProd(id){if(confirm('Remover?')){state.prods=state.prods.filter(p=>p.id!==id);save('prods');render();}}
 // ============ PRODUCT MODAL STATE ============
