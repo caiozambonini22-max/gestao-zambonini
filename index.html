@@ -1225,14 +1225,51 @@ function toggleCat(id){if(catExpanded.has(id)){catExpanded.delete(id);}else{catE
 function toggleSubCat(id){if(subCatExpanded.has(id)){subCatExpanded.delete(id);}else{subCatExpanded.add(id);}render();}
 
 function getStockForProd(p){
-  const s=state.stock.find(x=>x.productId===p.id)||{productId:p.id,quantity:0,avgCost:0,movements:[],variations:[]};
+  const sIdx=state.stock.findIndex(x=>x.productId===p.id);
+  let s=sIdx>=0?{...state.stock[sIdx]}:{productId:p.id,quantity:0,avgCost:0,movements:[],variations:[]};
+
+  // Auto-sync variações do produto (tipo 'variacao') para o estoque
+  if(p.tipo==='variacao'&&p.variacoes&&p.variacoes.length>0){
+    const existingVars=[...(s.variations||[])];
+    let changed=false;
+    p.variacoes.forEach(attr=>{
+      (attr.opcoes||[]).forEach(op=>{
+        const label=p.variacoes.length>1?`${attr.nome}: ${op}`:op;
+        if(!existingVars.find(v=>v.name===label)){
+          existingVars.push({id:uid(),name:label,quantity:0});
+          changed=true;
+        }
+      });
+    });
+    if(changed){
+      if(sIdx>=0){state.stock[sIdx].variations=existingVars;state.stock[sIdx].quantity=existingVars.reduce((a,v)=>a+Number(v.quantity||0),0);}
+      else{const ns={productId:p.id,quantity:0,avgCost:0,movements:[],variations:existingVars};state.stock.push(ns);}
+      try{localStorage.setItem('zb_cache_stock',JSON.stringify(state.stock));}catch{}
+      clearTimeout(saveTimers['stock_auto']);
+      saveTimers['stock_auto']=setTimeout(()=>dbSet('stock',state.stock),2000);
+    }
+    s={...s,variations:existingVars};
+  }
+
   const vars=s.variations||[];
   const totalQty=vars.length>0?vars.reduce((a,v)=>a+Number(v.quantity||0),0):Number(s.quantity||0);
-  const cost=p.costMode==='avg'&&s.avgCost>0?Number(s.avgCost):Number(p.costPrice||0);
+  const cost=p.costMode==='avg'&&Number(s.avgCost)>0?Number(s.avgCost):Number(p.costPrice||0);
   return {...s,variations:vars,quantity:totalQty,cost};
 }
 
-function prodRow(p, indent=0){
+function saveVarQty(productId,varId,newQty){
+  const idx=state.stock.findIndex(s=>s.productId===productId);
+  if(idx<0)return;
+  const vars=state.stock[idx].variations||[];
+  const vIdx=vars.findIndex(v=>v.id===varId);
+  if(vIdx<0)return;
+  vars[vIdx].quantity=Math.max(0,Number(newQty)||0);
+  state.stock[idx].variations=vars;
+  state.stock[idx].quantity=vars.reduce((a,v)=>a+Number(v.quantity||0),0);
+  save('stock');
+}
+
+function prodRow(p,indent=0){
   const s=getStockForProd(p);
   const hasVars=s.variations&&s.variations.length>0;
   const expanded=estoqueExpanded.has(p.id);
@@ -1241,7 +1278,7 @@ function prodRow(p, indent=0){
   let rows=`<tr style="cursor:pointer" onclick="toggleExpand('${p.id}')">
     <td style="${pad}">
       <span style="display:inline-flex;align-items:center;gap:7px">
-        <span style="font-size:10px;color:var(--or);display:inline-block;transform:rotate(${expanded?'90':'0'}deg);transition:transform .2s">${hasVars?'▶':'　'}</span>
+        <span style="font-size:11px;color:var(--or);display:inline-block;transform:rotate(${expanded?'90':'0'}deg);transition:transform .2s;min-width:14px">${hasVars?'▶':'　'}</span>
         <span style="font-weight:600">${esc(p.name)}</span>
         ${hasVars?`<span style="background:var(--sf3);border:1px solid var(--bd);border-radius:10px;font-size:10px;color:var(--txd);padding:1px 7px">${s.variations.length} var.</span>`:''}
       </span>
@@ -1253,7 +1290,7 @@ function prodRow(p, indent=0){
     <td style="font-weight:700;color:var(--or)">${fmtBRL(s.quantity*s.cost)}</td>
     <td onclick="event.stopPropagation()">
       <div style="display:flex;gap:5px">
-        <button class="btn bg2 sm" onclick="openManageVars('${p.id}')">Variações</button>
+        <button class="btn bg2 sm" onclick="openManageVars('${p.id}')">+ Var.</button>
         ${!hasVars?`<button class="btn bg2 sm" onclick="openAdjModal('${p.id}',null)">Ajustar</button>`:''}
       </div>
     </td>
@@ -1262,14 +1299,26 @@ function prodRow(p, indent=0){
     s.variations.forEach(v=>{
       const vq=Number(v.quantity||0);
       const vClass=vq>5?'s-ok':vq>0?'s-low':'s-zero';
-      rows+=`<tr style="background:rgba(249,115,22,.04)">
+      rows+=`<tr style="background:rgba(249,115,22,.04)" onclick="event.stopPropagation()">
         <td style="padding-left:${36+indent}px;color:var(--txm);font-size:12px">
-          <span style="color:var(--bd);margin-right:6px">└</span>${esc(v.name)}
+          <span style="color:var(--sf4);margin-right:6px">└</span>${esc(v.name)}
         </td>
         <td><span class="${vClass}">${vq} un.</span></td>
         <td style="color:var(--txd)">—</td><td style="color:var(--txd)">—</td><td></td>
         <td style="color:var(--txm)">${fmtBRL(vq*s.cost)}</td>
-        <td><button class="btn bg2 sm" onclick="openAdjModal('${p.id}','${v.id}')">Ajustar</button></td>
+        <td>
+          <div style="display:flex;align-items:center;gap:5px">
+            <div style="display:flex;align-items:center;background:var(--sf3);border:1px solid var(--bd);border-radius:6px;overflow:hidden">
+              <button onclick="saveVarQty('${p.id}','${v.id}',${Math.max(0,vq-1)})" style="background:none;border:none;color:var(--txm);cursor:pointer;padding:2px 8px;font-size:15px;line-height:1.2">−</button>
+              <input type="number" value="${vq}" min="0"
+                onchange="saveVarQty('${p.id}','${v.id}',this.value)"
+                onclick="event.stopPropagation();this.select()"
+                style="width:44px;background:transparent;border:none;color:var(--tx);text-align:center;font-size:12px;font-weight:700;padding:4px 0;outline:none">
+              <button onclick="saveVarQty('${p.id}','${v.id}',${vq+1})" style="background:none;border:none;color:var(--or);cursor:pointer;padding:2px 8px;font-size:15px;line-height:1.2">+</button>
+            </div>
+            <button class="btn bg2 sm" onclick="openAdjModal('${p.id}','${v.id}')" title="Histórico">📋</button>
+          </div>
+        </td>
       </tr>`;
     });
   }
