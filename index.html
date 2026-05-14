@@ -1920,13 +1920,15 @@ function renderProdModal(){
       ${f.variacoes.map((v,vi) => {
         return `<div style="background:var(--sf2);border-radius:7px;padding:12px;margin-bottom:8px;border:1px solid var(--bd)">
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-            <div class="field" style="flex:1"><label>Nome do tipo</label><input value="${esc(v.nome)}" oninput="prodModalData.variacoes[${vi}].nome=this.value" placeholder="Ex: Cor, Tamanho, Pulseira..."></div>
+            <div class="field" style="flex:1"><label>Nome do tipo</label><input value="${esc(v.nome)}" oninput="prodModalData.variacoes[${vi}].nome=this.value" placeholder="Ex: Cor, Tamanho, Pulseira..."
+              onkeydown="if(event.key==='Enter'){event.preventDefault();const ins=document.querySelectorAll('#ops-${vi} input');if(ins.length){ins[0].focus();}else{prodModalData.variacoes[${vi}].opcoes.push('');renderProdModal();setTimeout(()=>{const i=document.querySelectorAll('#ops-${vi} input');if(i.length)i[0].focus();},30);}}"></div>
             <button class="btn bd2 sm" style="align-self:flex-end" onclick="removeVariacao(${vi})">× Remover</button>
           </div>
           <div class="sl" style="margin-bottom:6px;font-size:9px">Opções</div>
           <div id="ops-${vi}" style="display:flex;flex-direction:column;gap:5px">
             ${(v.opcoes||[]).map((op,oi)=>{const opVal=typeof op==='object'?(op.valor||''):op;return `<div style="display:flex;gap:6px;align-items:center">
-              <input value="${esc(opVal)}" oninput="setVarOpcao(${vi},${oi},this.value)" placeholder="Ex: Prata" style="flex:1;max-width:180px">
+              <input value="${esc(opVal)}" oninput="setVarOpcao(${vi},${oi},this.value)" placeholder="Ex: Prata" style="flex:1;max-width:180px"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();prodModalData.variacoes[${vi}].opcoes.push('');renderProdModal();setTimeout(()=>{const ins=document.querySelectorAll('#ops-${vi} input');if(ins.length)ins[ins.length-1].focus();},30);}">
               <button class="btn bd2 sm" onclick="prodModalData.variacoes[${vi}].opcoes.splice(${oi},1);renderProdModal()">×</button>
             </div>`;}).join('')}
           </div>
@@ -1998,9 +2000,28 @@ function renderProdModal(){
         <div class="field"><label>Nome *</label><input id="p-name" value="${esc(f.name)}" oninput="prodModalData.name=this.value"></div>
         <div class="field"><label>Marca</label><input id="p-brand" value="${esc(f.brand||'')}" oninput="prodModalData.brand=this.value"></div>
       </div>
-      <div class="fr">
+      <div class="fr3">
         <div class="field"><label>SKU</label><input id="p-sku" value="${esc(f.sku||'')}" oninput="prodModalData.sku=this.value"></div>
         <div class="field"><label>NCM</label><input id="p-ncm" value="${esc(f.ncm||'')}" oninput="prodModalData.ncm=this.value" placeholder="8517.62.91"></div>
+        <div class="field">
+          <label>Categoria</label>
+          <select onchange="prodModalData.categoryId=this.value" style="width:100%">
+            <option value="">— Sem categoria —</option>
+            ${(()=>{
+              const cats=state.categories||[];
+              const roots=cats.filter(c=>!c.parentId);
+              let opts='';
+              roots.forEach(cat=>{
+                opts+=`<option value="${cat.id}" ${f.categoryId===cat.id?'selected':''}>${esc(cat.icon||'📁')} ${esc(cat.name)}</option>`;
+                cats.filter(c=>c.parentId===cat.id).forEach(sub=>{
+                  opts+=`<option value="${sub.id}" ${f.categoryId===sub.id?'selected':''}>&nbsp;&nbsp;└ ${esc(sub.icon||'📂')} ${esc(sub.name)}</option>`;
+                });
+              });
+              return opts||'<option disabled>Nenhuma categoria — crie em Estoque → Por Categoria</option>';
+            })()}
+          </select>
+          ${!(state.categories&&state.categories.length)?`<div style="font-size:10px;color:var(--txd);margin-top:3px">Crie categorias em Estoque → 📁 Por Categoria → ⚙️ Gerenciar</div>`:''}
+        </div>
       </div>
       <div>
         <div class="sl" style="margin-bottom:8px">Tipo de Produto</div>
@@ -2109,6 +2130,7 @@ function saveProd(){
     costMode:f.costMode||'manual',gtin:f.gtin||'',cest:f.cest||'',origemICMS:f.origemICMS||'0',unidMedida:f.unidMedida||'Un',tipoEmbalagem:f.tipoEmbalagem||'Pacote/Caixa',controlarEstoque:f.controlarEstoque||'sim',estoqueInicial:f.estoqueInicial||0,estoqueMin:f.estoqueMin||0,estoqueMax:f.estoqueMax||0,localizacao:f.localizacao||'',diasPreparo:f.diasPreparo||0,weightLiq:f.weightLiq||'',descricao:f.descricao||'',obsInterna:f.obsInterna||'',tipo:f.tipo||'simples',
     variacoes:f.variacoes||[],kitItems:f.kitItems||[],skuData:f.skuData||{},
     kitDiscount:Number(f.kitDiscount||0),
+    categoryId:f.categoryId||null,
     createdAt:f.createdAt||new Date().toISOString()
   };
   if(f.id){state.prods=state.prods.map(p=>p.id===f.id?prod:p);}
