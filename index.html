@@ -811,7 +811,12 @@ function renderOrderModal(){
             <div class="field"><label>Complemento</label><input value="${esc(o.complement||'')}" oninput="setOrderField('complement',this.value)"></div>
             <div class="field"><label>Cidade</label><input value="${esc(o.city)}" oninput="setOrderField('city',this.value)"></div>
             <div class="field"><label>UF</label><input value="${esc(o.state)}" oninput="setOrderField('state',this.value.toUpperCase().slice(0,2))" maxlength="2"></div>
-            <div class="field"><label>CEP</label><input value="${esc(o.cep||'')}" oninput="setOrderField('cep',this.value)" onblur="buscarCEP(this.value,function(d){setOrderField('street',d.street||orderModalData.street);setOrderField('bairro',d.bairro||orderModalData.bairro);setOrderField('city',d.city||orderModalData.city);setOrderField('state',d.state||orderModalData.state);setOrderField('cep',d.cep);showOrderModal();})" placeholder="00000-000"></div>
+            <div class="field"><label>CEP</label>
+              <div style="display:flex;gap:5px;align-items:center">
+                <input id="order-cep" value="${esc(o.cep||'')}" oninput="setOrderField('cep',this.value)" placeholder="00000-000" style="flex:1">
+                <button onclick="(async()=>{const el=document.getElementById('order-cep');if(!el)return;const btn=this;btn.textContent='⏳';btn.disabled=true;await new Promise(r=>{buscarCEP(el.value,function(d){setOrderField('street',d.street||orderModalData.street);setOrderField('bairro',d.bairro||orderModalData.bairro);setOrderField('city',d.city||orderModalData.city);setOrderField('state',d.state||orderModalData.state);setOrderField('cep',d.cep);showOrderModal();r();});setTimeout(r,4000);});btn.textContent='🔍';btn.disabled=false;})()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;color:var(--or);cursor:pointer;padding:6px 10px;font-size:14px;white-space:nowrap" title="Buscar endereço pelo CEP">🔍</button>
+              </div>
+            </div>
           </div>
           <!-- Endereço de entrega diferente -->
           <div style="margin-top:10px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="setOrderField('diffDeliveryAddr',!orderModalData.diffDeliveryAddr);showOrderModal()">
@@ -826,7 +831,12 @@ function renderOrderModal(){
               <div class="field"><label>Complemento</label><input value="${esc(o.deliveryComplement||'')}" oninput="setOrderField('deliveryComplement',this.value)"></div>
               <div class="field"><label>Cidade</label><input value="${esc(o.deliveryCity||'')}" oninput="setOrderField('deliveryCity',this.value)"></div>
               <div class="field"><label>UF</label><input value="${esc(o.deliveryState||'')}" oninput="setOrderField('deliveryState',this.value.toUpperCase().slice(0,2))" maxlength="2"></div>
-              <div class="field"><label>CEP</label><input value="${esc(o.deliveryCep||'')}" oninput="setOrderField('deliveryCep',this.value)" onblur="buscarCEP(this.value,function(d){setOrderField('deliveryStreet',d.street||orderModalData.deliveryStreet);setOrderField('deliveryBairro',d.bairro||orderModalData.deliveryBairro);setOrderField('deliveryCity',d.city||orderModalData.deliveryCity);setOrderField('deliveryState',d.state||orderModalData.deliveryState);setOrderField('deliveryCep',d.cep);showOrderModal();})" placeholder="00000-000"></div>
+              <div class="field"><label>CEP</label>
+                <div style="display:flex;gap:5px;align-items:center">
+                  <input id="order-del-cep" value="${esc(o.deliveryCep||'')}" oninput="setOrderField('deliveryCep',this.value)" placeholder="00000-000" style="flex:1">
+                  <button onclick="(async()=>{const el=document.getElementById('order-del-cep');if(!el)return;const btn=this;btn.textContent='⏳';btn.disabled=true;await new Promise(r=>{buscarCEP(el.value,function(d){setOrderField('deliveryStreet',d.street||orderModalData.deliveryStreet);setOrderField('deliveryBairro',d.bairro||orderModalData.deliveryBairro);setOrderField('deliveryCity',d.city||orderModalData.deliveryCity);setOrderField('deliveryState',d.state||orderModalData.deliveryState);setOrderField('deliveryCep',d.cep);showOrderModal();r();});setTimeout(r,4000);});btn.textContent='🔍';btn.disabled=false;})()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;color:var(--or);cursor:pointer;padding:6px 10px;font-size:14px" title="Buscar endereço pelo CEP">🔍</button>
+                </div>
+              </div>
             </div>
           </div>`:''}
         </div>
@@ -857,8 +867,18 @@ function renderOrderModal(){
         <!-- PAGAMENTO -->
         <div class="card" style="margin-bottom:12px">
           <div class="sl">Pedido e Pagamento</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px">
             <div class="field"><label>Status</label><select onchange="setOrderField('status',this.value)">${statusOptions}</select></div>
+            <div class="field">
+              <label>Status Pagamento</label>
+              <select onchange="setOrderField('statusPagamento',this.value)" style="border-color:${o.statusPagamento==='pago'?'var(--gr)':o.statusPagamento==='entrega'?'var(--or)':'var(--bd)'}">
+                <option value="" ${!o.statusPagamento?'selected':''}>— Selecione —</option>
+                <option value="pago" ${o.statusPagamento==='pago'?'selected':''}>✅ Já Pagou</option>
+                <option value="entrega" ${o.statusPagamento==='entrega'?'selected':''}>🚚 Pagar na Entrega</option>
+                <option value="pendente" ${o.statusPagamento==='pendente'?'selected':''}>⏳ Pendente</option>
+                <option value="parcial" ${o.statusPagamento==='parcial'?'selected':''}>🔄 Parcialmente Pago</option>
+              </select>
+            </div>
             <div class="field"><label>Data</label><input type="date" value="${o.date}" oninput="setOrderField('date',this.value)"></div>
             <div class="field"><label>Canal</label><select onchange="setOrderField('channel',this.value)">${channelOptions}</select></div>
             <div class="field"><label>Forma de Pagamento</label></div>
@@ -917,6 +937,16 @@ function renderOrderModal(){
         <div style="display:grid;gap:8px">
           <button class="btn bp" style="width:100%;padding:12px;font-size:14px;font-weight:700;justify-content:center" onclick="saveOrder()">${isNew?'✅ Criar Pedido':'💾 Salvar Alteracoes'}</button>
           <button class="btn bg2" style="width:100%;justify-content:center" onclick="closeOrderModal()">← Cancelar</button>
+          ${!isNew?`
+          <div style="border-top:1px solid var(--bd);padding-top:10px;margin-top:2px">
+            <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);margin-bottom:8px;font-weight:600">Ações Rápidas</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="copiarMotoboy('${o.id||''}')">🛵 Copiar Motoboy</button>
+              <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="copiarResumoCliente('${o.id||''}')">💬 Resumo Cliente</button>
+              <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="imprimirComprovante('${o.id||''}')">🖨️ Impressora Térmica</button>
+              <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="gerarComprovanteImagem('${o.id||''}')">🖼️ Comprovante Img</button>
+            </div>
+          </div>`:''}
         </div>
       </div>
     </div>
@@ -2342,6 +2372,150 @@ function saveProd(){
 }
 </script>
 <script>
+// ============ AÇÕES PÓS-PEDIDO ============
+function getOrderById(id){return state.orders.find(o=>o.id===id)||orderModalData;}
+
+function copiarMotoboy(id){
+  const o=getOrderById(id);if(!o)return;
+  const prod=state.prods.find(p=>p.id===o.productId);
+  const items=(o.items||[{productId:o.productId,quantity:o.quantity,salePrice:o.salePrice}]).map(it=>{
+    const p=state.prods.find(x=>x.id===it.productId);
+    return `  • ${p?p.name:'Produto'} x${it.quantity||1} — ${fmtBRL(it.salePrice||o.salePrice||0)}`;
+  }).join('\n');
+  const pagStatus=o.statusPagamento==='pago'?'✅ JÁ PAGO':o.statusPagamento==='entrega'?'💵 COBRAR NA ENTREGA':'⏳ PENDENTE';
+  const txt=`🛵 ENTREGA — ZAMBONINI IMPORTS
+━━━━━━━━━━━━━━━━━━━━
+👤 ${o.clientName||'—'}
+📞 ${o.phone||'—'}
+━━━━━━━━━━━━━━━━━━━━
+📍 ${o.street||'—'}${o.streetNum?', '+o.streetNum:''}${o.complement?' — '+o.complement:''}
+    ${o.bairro||''} · ${o.city||''}/${o.state||''}
+    CEP: ${o.cep||'—'}
+━━━━━━━━━━━━━━━━━━━━
+📦 PRODUTO(S):
+${items}
+━━━━━━━━━━━━━━━━━━━━
+💰 TOTAL: ${fmtBRL(o.salePrice||0)}
+💳 PAGAMENTO: ${pagStatus}
+━━━━━━━━━━━━━━━━━━━━
+📋 Pedido #${o.orderNum||o.id||'—'}`;
+  navigator.clipboard.writeText(txt).then(()=>showToast('✅ Copiado para o motoboy!','gr')).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();showToast('✅ Copiado!','gr');});
+}
+
+function copiarResumoCliente(id){
+  const o=getOrderById(id);if(!o)return;
+  const items=(o.items||[{productId:o.productId,quantity:o.quantity,salePrice:o.salePrice}]).map(it=>{
+    const p=state.prods.find(x=>x.id===it.productId);
+    return `📦 ${p?p.name:'Produto'} x${it.quantity||1} — ${fmtBRL(it.salePrice||o.salePrice||0)}`;
+  }).join('\n');
+  const pay=(o.payments&&o.payments[0])||{type:'pix'};
+  const payLabel=pay.type==='pix'?'PIX ⚡':pay.type==='dinheiro'?'Dinheiro 💵':'Cartão 💳';
+  const pagStatus=o.statusPagamento==='pago'?'✅ Pagamento confirmado!':o.statusPagamento==='entrega'?'💵 Cobrar na entrega':'';
+  const txt=`Olá, ${(o.clientName||'').split(' ')[0]}! 😊
+
+✅ *Pedido confirmado — Zambonini Imports*
+
+${items}
+
+💰 *Total: ${fmtBRL(o.salePrice||0)}*
+💳 Forma: ${payLabel}
+${pagStatus?pagStatus+'\n':''}
+📍 Entrega em:
+${o.street||''}${o.streetNum?', '+o.streetNum:''} — ${o.bairro||''}
+${o.city||''}/${o.state||''} — CEP ${o.cep||''}
+
+${o.trackingCode?`📮 Rastreio: *${o.trackingCode}*\n`:''}Qualquer dúvida, é só chamar! 🙏`;
+  navigator.clipboard.writeText(txt).then(()=>showToast('✅ Resumo copiado — Cole no WhatsApp!','gr')).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();showToast('✅ Copiado!','gr');});
+}
+
+function imprimirComprovante(id){
+  const o=getOrderById(id);if(!o)return;
+  const prod=state.prods.find(p=>p.id===o.productId);
+  const items=(o.items||[{productId:o.productId,quantity:o.quantity,salePrice:o.salePrice}]).map(it=>{
+    const p=state.prods.find(x=>x.id===it.productId);
+    return `<tr><td>${p?p.name:'Produto'}</td><td style="text-align:center">${it.quantity||1}</td><td style="text-align:right">${fmtBRL(it.salePrice||o.salePrice||0)}</td></tr>`;
+  }).join('');
+  const pay=(o.payments&&o.payments[0])||{type:'pix'};
+  const pagStatus=o.statusPagamento==='pago'?'JA PAGO':o.statusPagamento==='entrega'?'COBRAR NA ENTREGA':'PENDENTE';
+  const w=window.open('','_blank','width=400,height=700');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Comprovante</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{font-family:'Courier New',monospace;font-size:12px;width:80mm;padding:4mm;background:#fff;color:#000;}
+    .center{text-align:center;} .bold{font-weight:bold;} .line{border-top:1px dashed #000;margin:4px 0;}
+    table{width:100%;border-collapse:collapse;} td{padding:2px 0;font-size:11px;}
+    .total{font-size:14px;font-weight:bold;text-align:right;border-top:2px solid #000;padding-top:4px;margin-top:4px;}
+    @media print{@page{margin:2mm;size:80mm auto;}}
+  </style></head><body>
+    <div class="center bold" style="font-size:14px">ZAMBONINI IMPORTS</div>
+    <div class="center" style="font-size:10px">Smartwatches & Acessorios</div>
+    <div class="line"></div>
+    <div>Pedido #: ${o.orderNum||o.id||'—'}</div>
+    <div>Data: ${o.date||new Date().toLocaleDateString('pt-BR')}</div>
+    <div class="line"></div>
+    <div class="bold">CLIENTE</div>
+    <div>${o.clientName||'—'}</div>
+    <div>${o.phone||''}</div>
+    <div>${o.street||''}${o.streetNum?', '+o.streetNum:''}</div>
+    <div>${o.city||''}/${o.state||''} - CEP ${o.cep||''}</div>
+    <div class="line"></div>
+    <div class="bold">ITENS</div>
+    <table>${items}</table>
+    <div class="total">TOTAL: ${fmtBRL(o.salePrice||0)}</div>
+    <div class="line"></div>
+    <div>Pagamento: ${pay.type==='pix'?'PIX':pay.type==='dinheiro'?'Dinheiro':'Cartao'}</div>
+    <div class="bold">${pagStatus}</div>
+    ${o.trackingCode?`<div class="line"></div><div>Rastreio: ${o.trackingCode}</div>`:''}
+    <div class="line"></div>
+    <div class="center" style="font-size:10px">Obrigado pela preferencia!</div>
+    <div class="center" style="font-size:10px">@zambonini.imports</div>
+    <br><br>
+    <script>window.onload=function(){window.print();}<\/script>
+  </body></html>`);
+  w.document.close();
+}
+
+function gerarComprovanteImagem(id){
+  const o=getOrderById(id);if(!o)return;
+  const canvas=document.createElement('canvas');
+  canvas.width=600;canvas.height=800;
+  const ctx=canvas.getContext('2d');
+  // Background
+  ctx.fillStyle='#0d0d0d';ctx.fillRect(0,0,600,800);
+  // Header
+  ctx.fillStyle='#f97316';ctx.font='bold 28px Arial';ctx.textAlign='center';ctx.fillText('⚡ ZAMBONINI IMPORTS',300,50);
+  ctx.fillStyle='#888';ctx.font='14px Arial';ctx.fillText('Smartwatches & Acessórios',300,75);
+  // Divider
+  ctx.strokeStyle='#333';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(40,95);ctx.lineTo(560,95);ctx.stroke();
+  // Order info
+  ctx.fillStyle='#f0f0f0';ctx.font='bold 16px Arial';ctx.textAlign='left';ctx.fillText('COMPROVANTE DE PEDIDO',40,125);
+  ctx.fillStyle='#888';ctx.font='13px Arial';ctx.fillText(`Pedido #${o.orderNum||o.id||'—'} · ${o.date||''}`,40,148);
+  // Client
+  ctx.strokeStyle='#333';ctx.beginPath();ctx.moveTo(40,165);ctx.lineTo(560,165);ctx.stroke();
+  ctx.fillStyle='#f97316';ctx.font='bold 13px Arial';ctx.fillText('CLIENTE',40,185);
+  ctx.fillStyle='#f0f0f0';ctx.font='14px Arial';ctx.fillText(o.clientName||'—',40,205);
+  ctx.fillStyle='#888';ctx.font='12px Arial';ctx.fillText(o.phone||'',40,222);ctx.fillText(`${o.street||''}${o.streetNum?', '+o.streetNum:''} — ${o.city||''}/${o.state||''}`,40,238);
+  // Divider
+  ctx.strokeStyle='#333';ctx.beginPath();ctx.moveTo(40,255);ctx.lineTo(560,255);ctx.stroke();
+  // Items
+  ctx.fillStyle='#f97316';ctx.font='bold 13px Arial';ctx.fillText('ITENS',40,275);
+  const items=o.items||[{productId:o.productId,quantity:o.quantity,salePrice:o.salePrice}];
+  let y=295;
+  items.forEach(it=>{const p=state.prods.find(x=>x.id===it.productId);ctx.fillStyle='#f0f0f0';ctx.font='13px Arial';ctx.fillText(`${p?p.name:'Produto'} x${it.quantity||1}`,40,y);ctx.textAlign='right';ctx.fillText(fmtBRL(it.salePrice||o.salePrice||0),560,y);ctx.textAlign='left';y+=22;});
+  // Total
+  ctx.strokeStyle='#f97316';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(40,y+5);ctx.lineTo(560,y+5);ctx.stroke();
+  ctx.fillStyle='#22c55e';ctx.font='bold 20px Arial';ctx.textAlign='right';ctx.fillText(`TOTAL: ${fmtBRL(o.salePrice||0)}`,560,y+30);
+  // Payment status
+  const pagStatus=o.statusPagamento==='pago'?'✅ JÁ PAGO':o.statusPagamento==='entrega'?'🚚 PAGAR NA ENTREGA':'⏳ PENDENTE';
+  ctx.textAlign='left';ctx.fillStyle='#f0f0f0';ctx.font='14px Arial';ctx.fillText(pagStatus,40,y+30);
+  // Footer
+  ctx.strokeStyle='#333';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(40,y+55);ctx.lineTo(560,y+55);ctx.stroke();
+  ctx.fillStyle='#888';ctx.font='12px Arial';ctx.textAlign='center';ctx.fillText('Obrigado pela preferência! @zambonini.imports',300,y+80);
+  // Download
+  const link=document.createElement('a');link.download=`comprovante-${o.orderNum||o.id||'pedido'}.png`;link.href=canvas.toDataURL('image/png');link.click();
+  showToast('✅ Imagem gerada!','gr');
+}
+
 // ============ DRE ============
 let dreMes=new Date().getMonth(), dreAno=new Date().getFullYear();
 let dreExtras={outrosR:'',mktg:'',aluguel:'',folha:'',fixas:'',outros:'',impostos:''};
