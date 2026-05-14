@@ -681,9 +681,23 @@ function renderItemsList(o){
   const items=o.items&&o.items.length>0?o.items:[{id:'main',productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||'',isGift:false}];
   let html='';
   items.forEach(function(item,idx){
+    const selProd=state.prods.find(p=>p.id===item.productId);
+    const selStock=selProd?getStockForProd(selProd):null;
+    const hasVars=selStock&&selStock.variations&&selStock.variations.length>0;
+
     let allProdOpts='<option value="">-- Selecione --</option>';
     state.prods.forEach(function(p){allProdOpts+='<option value="'+p.id+'"'+(item.productId===p.id?' selected':'')+'>'+esc(p.name)+'</option>';});
-    const cols='1fr 70px 120px 36px'+(items.length>1?' 36px':'');
+
+    let varOpts='';
+    if(hasVars){
+      varOpts='<option value="">— Cor/Tamanho —</option>';
+      selStock.variations.forEach(function(v){
+        const qty=Number(v.quantity||0);
+        varOpts+='<option value="'+v.id+'"'+(item.variacaoId===v.id?' selected':'')+' '+(qty===0?'style="color:#ef4444"':'')+'>'+esc(v.name)+' ('+qty+' un.)</option>';
+      });
+    }
+
+    const cols=(hasVars?'1fr 140px':'1fr')+' 70px 120px 36px'+(items.length>1?' 36px':'');
     const bg=item.isGift?'rgba(34,197,94,.06)':'var(--sf3)';
     const border=item.isGift?'rgba(34,197,94,.3)':'var(--bd)';
     const lbl=item.isGift?'🎁 Brinde':'📦 Produto';
@@ -691,10 +705,14 @@ function renderItemsList(o){
     const giftBg=item.isGift?'rgba(34,197,94,.15)':'transparent';
     const giftColor=item.isGift?'var(--gr)':'var(--txd)';
     const valorLbl=item.isGift?'Valor (0=gratis)':'Valor';
+
     html+='<div data-item-idx="'+idx+'" style="display:grid;grid-template-columns:'+cols+';gap:7px;align-items:end;padding:10px;background:'+bg+';border-radius:8px;border:1px solid '+border+';margin-bottom:7px">';
-    html+='<div class="field"><label>'+lbl+'</label><select onchange="setItemField('+idx+',\"productId\",this.value);updateOrderSummary()">'+allProdOpts+'</select></div>';
-    html+='<div class="field"><label>Qtd</label><input class="item-qty" type="number" min="1" value="'+(item.quantity||1)+'" oninput="setItemField('+idx+',\"quantity\",Number(this.value));updateOrderSummary()"></div>';
-    html+='<div class="field"><label>'+valorLbl+'</label><div class="ip"><span class="ips">R$</span><input class="item-val" type="number" value="'+(item.salePrice||'')+'" oninput="setItemField('+idx+',\"salePrice\",this.value);updateOrderSummary()" placeholder="0,00"></div></div>';
+    html+='<div class="field"><label>'+lbl+'</label><select onchange="setItemField('+idx+',\'productId\',this.value);setItemField('+idx+',\'variacaoId\',\'\');setItemField('+idx+',\'salePrice\',state.prods.find(p=>p.id===this.value)?state.prods.find(p=>p.id===this.value).salePrice:\'\');updateOrderSummary();document.getElementById(\'order-items-list\').innerHTML=renderItemsList(orderModalData)">'+allProdOpts+'</select></div>';
+    if(hasVars){
+      html+='<div class="field"><label>Variação</label><select onchange="setItemField('+idx+',\'variacaoId\',this.value)">'+varOpts+'</select></div>';
+    }
+    html+='<div class="field"><label>Qtd</label><input class="item-qty" type="number" min="1" value="'+(item.quantity||1)+'" oninput="setItemField('+idx+',\'quantity\',Number(this.value));updateOrderSummary()"></div>';
+    html+='<div class="field"><label>'+valorLbl+'</label><div class="ip"><span class="ips">R$</span><input class="item-val" type="number" value="'+(item.salePrice||'')+'" oninput="setItemField('+idx+',\'salePrice\',this.value);updateOrderSummary()" placeholder="0,00"></div></div>';
     html+='<button onclick="toggleItemGift('+idx+')" style="padding:6px;border-radius:6px;cursor:pointer;border:1px solid '+giftBorder+';background:'+giftBg+';color:'+giftColor+';font-size:14px;height:36px;align-self:flex-end">🎁</button>';
     if(items.length>1)html+='<button class="btn bd2 sm" style="align-self:flex-end;padding:6px;height:36px" onclick="removeOrderItem('+idx+')">×</button>';
     html+='</div>';
@@ -1176,7 +1194,26 @@ function saveOrder(){
     if(!o.items||o.items.length===0)o.items=[{id:uid(),productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}];
     const saved={...o,id:uid(),orderNum:state.orderSeq,createdAt:new Date().toISOString()};
     delete saved._isNew;
-    state.stock=state.stock.map(s=>{if(s.productId===saved.productId){return {...s,quantity:Math.max(0,s.quantity-Number(saved.quantity||1))};}return s;});
+
+    // Debita estoque por item — respeita variação se selecionada
+    saved.items.forEach(item=>{
+      if(!item.productId||item.isGift)return;
+      const qty=Number(item.quantity||1);
+      const sIdx=state.stock.findIndex(s=>s.productId===item.productId);
+      if(sIdx<0)return;
+      if(item.variacaoId){
+        // Debita da variação específica
+        const vars=state.stock[sIdx].variations||[];
+        const vIdx=vars.findIndex(v=>v.id===item.variacaoId);
+        if(vIdx>=0){vars[vIdx].quantity=Math.max(0,Number(vars[vIdx].quantity||0)-qty);}
+        state.stock[sIdx].variations=vars;
+        state.stock[sIdx].quantity=vars.reduce((a,v)=>a+Number(v.quantity||0),0);
+      } else {
+        // Debita do total
+        state.stock[sIdx].quantity=Math.max(0,state.stock[sIdx].quantity-qty);
+      }
+    });
+
     state.orders=[saved,...state.orders];
     state.orderSeq++;
     save('orderSeq');save('stock');
