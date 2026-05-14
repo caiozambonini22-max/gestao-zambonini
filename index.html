@@ -154,7 +154,7 @@ select option{background:var(--sf2);}
     <button class="ni" onclick="setTab('metricas')" id="nav-metricas">📊 Metricas</button>
     <button class="ni" onclick="setTab('config')" id="nav-config">Config</button>
     <div class="topnav-r">
-      <button class="btn bg2 sm" onclick="exportBackup()" title="Exportar backup dos dados" style="font-size:11px;padding:4px 10px">💾 Backup</button>
+      <button class="btn bg2 sm" onclick="forcSync()" title="Forçar sincronização com Supabase" style="font-size:11px;padding:4px 10px">🔄 Sincronizar</button>
       <button class="btn bg2 sm" onclick="document.getElementById('import-input').click()" title="Importar backup" style="font-size:11px;padding:4px 10px">📂 Importar</button>
       <input id="import-input" type="file" accept=".json" style="display:none" onchange="importBackup(this)">
       <button class="btn bg2 sm" onclick="logout()" style="font-size:11px;padding:4px 10px">Sair</button>
@@ -188,8 +188,8 @@ let state = {
   prods: [], orders: [], maqs: JSON.parse(JSON.stringify(DEF_MAQ)),
   channels: JSON.parse(JSON.stringify(DEF_CH)), nfs: [], stock: [],
   suppliers: [], purchaseOrders: [], orderSeq: 1001,
-  deliveryCities: [],
-  motoboys: [], clients: [],
+  deliveryCities: [], motoboys: [], clients: [],
+  categories: [],
   config: {gastoAnuncios:'',igFollowers:'',igF7:'',igF30:'',valores:['Venda e Energia!','Atendimento Humanizado!','Foco no Cliente!','Quanto mais voce posta, mais voce vende!','Simples e bem feito resolve!']}
 };
 let saveTimers = {};
@@ -230,7 +230,9 @@ function setSyncStatus(s){
   const txt=document.getElementById('sync-txt');
   if(!dot||!txt)return;
   dot.className='sync-dot'+(s==='syncing'?' syncing':s==='error'?' error':'');
-  txt.textContent=s==='syncing'?'Salvando...':s==='error'?'Erro ao salvar':'Sincronizado';
+  if(s==='syncing') txt.textContent='Salvando...';
+  else if(s==='error') txt.textContent='⚠ Salvo local · Erro na nuvem';
+  else txt.textContent='✓ Salvo';
 }
 
 async function dbGet(key){
@@ -240,19 +242,32 @@ async function dbGet(key){
     return data.value;
   }catch{return null;}
 }
+
 async function dbSet(key,value){
   try{
-    await sb.from('zambonini_data').upsert({key,value,updated_at:new Date().toISOString()});
+    const {error}=await sb.from('zambonini_data').upsert(
+      {key, value, updated_at:new Date().toISOString()},
+      {onConflict:'key'}
+    );
+    if(error){console.warn('Supabase save error:',error.message);setSyncStatus('error');}
   }catch(e){setSyncStatus('error');}
 }
 
 function save(key){
+  // 1. Salva no localStorage IMEDIATAMENTE (nunca perde dados no F5)
+  try{
+    localStorage.setItem('zb_cache_'+key, JSON.stringify(state[key]));
+    localStorage.setItem('zb_save_time', new Date().toISOString());
+  }catch{}
+
+  // 2. Sincroniza com Supabase em background (com debounce)
   setSyncStatus('syncing');
   clearTimeout(saveTimers[key]);
   saveTimers[key]=setTimeout(async()=>{
-    await dbSet(key,state[key]);
-    setSyncStatus('ok');
-  },800);
+    await dbSet(key, state[key]);
+    const allOk=!document.querySelector('#sync-txt')?.textContent?.includes('Erro');
+    if(allOk) setSyncStatus('ok');
+  }, 600);
 }
 
 // ============ LOAD ============
@@ -339,7 +354,14 @@ function doLogin(){
 }
 async function loadAll(){
   document.getElementById('loading-msg').textContent='Carregando dados...';
-  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+  // Informa se está acordando o Supabase
+  setTimeout(()=>{
+    const el=document.getElementById('loading-msg');
+    if(el&&document.getElementById('loading-screen').style.display!=='none'){
+      el.textContent='Conectando ao servidor... (pode levar até 30s na primeira vez)';
+    }
+  }, 4000);
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
 
   // ── Mostra dados em cache imediatamente (sem esperar Supabase) ──
   let hasCached = false;
@@ -372,7 +394,7 @@ async function loadAll(){
 
   // ── Busca Supabase em paralelo (muito mais rápido) ──
   try{
-    const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),6000));
+    const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),30000));
     const fetchAll = Promise.all(keys.map(async k=>{
       const v = await dbGet(k);
       if(v!==null){
@@ -1191,6 +1213,332 @@ function saveNF(existingId){
 // ============ ESTOQUE ============
 let estoqueTab='estoque';
 let estoqueExpanded=new Set();
+let catExpanded=new Set();
+let subCatExpanded=new Set();
+
+function toggleExpand(productId){
+  if(estoqueExpanded.has(productId)){estoqueExpanded.delete(productId);}
+  else{estoqueExpanded.add(productId);}
+  render();
+}
+function toggleCat(id){if(catExpanded.has(id)){catExpanded.delete(id);}else{catExpanded.add(id);}render();}
+function toggleSubCat(id){if(subCatExpanded.has(id)){subCatExpanded.delete(id);}else{subCatExpanded.add(id);}render();}
+
+function getStockForProd(p){
+  const s=state.stock.find(x=>x.productId===p.id)||{productId:p.id,quantity:0,avgCost:0,movements:[],variations:[]};
+  const vars=s.variations||[];
+  const totalQty=vars.length>0?vars.reduce((a,v)=>a+Number(v.quantity||0),0):Number(s.quantity||0);
+  const cost=p.costMode==='avg'&&s.avgCost>0?Number(s.avgCost):Number(p.costPrice||0);
+  return {...s,variations:vars,quantity:totalQty,cost};
+}
+
+function prodRow(p, indent=0){
+  const s=getStockForProd(p);
+  const hasVars=s.variations&&s.variations.length>0;
+  const expanded=estoqueExpanded.has(p.id);
+  const qClass=s.quantity>5?'s-ok':s.quantity>0?'s-low':'s-zero';
+  const pad=indent>0?`padding-left:${indent}px`:'';
+  let rows=`<tr style="cursor:pointer" onclick="toggleExpand('${p.id}')">
+    <td style="${pad}">
+      <span style="display:inline-flex;align-items:center;gap:7px">
+        <span style="font-size:10px;color:var(--or);display:inline-block;transform:rotate(${expanded?'90':'0'}deg);transition:transform .2s">${hasVars?'▶':'　'}</span>
+        <span style="font-weight:600">${esc(p.name)}</span>
+        ${hasVars?`<span style="background:var(--sf3);border:1px solid var(--bd);border-radius:10px;font-size:10px;color:var(--txd);padding:1px 7px">${s.variations.length} var.</span>`:''}
+      </span>
+    </td>
+    <td><span class="${qClass}">${s.quantity} un.</span></td>
+    <td style="color:var(--txm)">${fmtBRL(p.costPrice)}</td>
+    <td style="color:${s.avgCost>0?'var(--or)':'var(--txd)'};font-weight:${s.avgCost>0?600:400}">${s.avgCost>0?fmtBRL(s.avgCost):'—'}</td>
+    <td><span class="${p.costMode==='avg'?'badge b-gr':'badge b-bl'}">${p.costMode==='avg'?'Auto':'Manual'}</span></td>
+    <td style="font-weight:700;color:var(--or)">${fmtBRL(s.quantity*s.cost)}</td>
+    <td onclick="event.stopPropagation()">
+      <div style="display:flex;gap:5px">
+        <button class="btn bg2 sm" onclick="openManageVars('${p.id}')">Variações</button>
+        ${!hasVars?`<button class="btn bg2 sm" onclick="openAdjModal('${p.id}',null)">Ajustar</button>`:''}
+      </div>
+    </td>
+  </tr>`;
+  if(expanded&&hasVars){
+    s.variations.forEach(v=>{
+      const vq=Number(v.quantity||0);
+      const vClass=vq>5?'s-ok':vq>0?'s-low':'s-zero';
+      rows+=`<tr style="background:rgba(249,115,22,.04)">
+        <td style="padding-left:${36+indent}px;color:var(--txm);font-size:12px">
+          <span style="color:var(--bd);margin-right:6px">└</span>${esc(v.name)}
+        </td>
+        <td><span class="${vClass}">${vq} un.</span></td>
+        <td style="color:var(--txd)">—</td><td style="color:var(--txd)">—</td><td></td>
+        <td style="color:var(--txm)">${fmtBRL(vq*s.cost)}</td>
+        <td><button class="btn bg2 sm" onclick="openAdjModal('${p.id}','${v.id}')">Ajustar</button></td>
+      </tr>`;
+    });
+  }
+  return rows;
+}
+
+function renderEstoque(){
+  const sl=state.prods.map(p=>({...p,...getStockForProd(p)}));
+  const totEst=sl.reduce((a,p)=>a+p.quantity*p.cost,0);
+
+  // ── Vista por produto ──
+  let prodRows='';
+  if(estoqueTab==='estoque'){
+    sl.forEach(p=>{prodRows+=prodRow(p);});
+  }
+
+  // ── Vista por categoria ──
+  let catView='';
+  if(estoqueTab==='categorias'){
+    const cats=state.categories||[];
+    const roots=cats.filter(c=>!c.parentId);
+    const semCat=sl.filter(p=>!cats.find(c=>c.id===p.categoryId));
+
+    const renderCatSummary=(prods,bgColor='var(--sf3)')=>{
+      const qty=prods.reduce((a,p)=>a+p.quantity,0);
+      const val=prods.reduce((a,p)=>a+p.quantity*p.cost,0);
+      const custo=prods.reduce((a,p)=>a+p.quantity*(Number(p.costPrice)||0),0);
+      return `<span style="display:flex;gap:16px;font-size:11px">
+        <span style="color:var(--txm)">${prods.length} produto${prods.length!==1?'s':''}</span>
+        <span class="${qty>0?'':'s-zero'}">${qty} un.</span>
+        <span style="color:var(--or);font-weight:600">Venda: ${fmtBRL(val)}</span>
+        <span style="color:var(--txm)">Custo: ${fmtBRL(custo)}</span>
+      </span>`;
+    };
+
+    if(!roots.length&&!sl.length){
+      catView=`<div style="text-align:center;padding:40px;color:var(--txd)">
+        <div style="font-size:32px;margin-bottom:12px">📁</div>
+        <div>Nenhuma categoria criada.</div>
+        <button class="btn bp" style="margin-top:14px" onclick="openManageCats()">+ Criar categorias</button>
+      </div>`;
+    }else{
+      // Card de resumo geral
+      catView+=`<div class="g4" style="margin-bottom:16px">
+        <div class="card"><div class="ct">Total em Estoque</div><div class="cv cv-or">${fmtBRL(totEst)}</div></div>
+        <div class="card"><div class="ct">Total de Produtos</div><div class="cv">${sl.length}</div></div>
+        <div class="card"><div class="ct">Zerados</div><div class="cv cv-rd">${sl.filter(p=>p.quantity<=0).length}</div></div>
+        <div class="card"><div class="ct">Estoque Baixo</div><div class="cv" style="color:#f59e0b">${sl.filter(p=>p.quantity>0&&p.quantity<=5).length}</div></div>
+      </div>`;
+
+      // Categorias raiz
+      roots.forEach(cat=>{
+        const subCats=cats.filter(c=>c.parentId===cat.id);
+        const directProds=sl.filter(p=>p.categoryId===cat.id);
+        const allProds=[...directProds,...subCats.flatMap(sc=>sl.filter(p=>p.categoryId===sc.id))];
+        const isExp=catExpanded.has(cat.id);
+        catView+=`<div style="margin-bottom:10px">
+          <div onclick="toggleCat('${cat.id}')" style="background:var(--sf2);border:1px solid var(--bd);border-radius:8px;padding:12px 16px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;${isExp?'border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent':''}">
+            <span style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:14px;display:inline-block;transform:rotate(${isExp?'90':'0'}deg);transition:transform .2s;color:var(--or)">▶</span>
+              <span style="font-weight:700;font-size:14px">${esc(cat.icon||'📁')} ${esc(cat.name)}</span>
+              ${subCats.length?`<span style="background:var(--sf3);color:var(--txd);font-size:10px;padding:2px 8px;border-radius:10px">${subCats.length} subcateg.</span>`:''}
+            </span>
+            ${renderCatSummary(allProds)}
+          </div>`;
+        if(isExp){
+          catView+=`<div style="border:1px solid var(--bd);border-top:none;border-radius:0 0 8px 8px;padding:12px;background:var(--sf);display:flex;flex-direction:column;gap:8px">`;
+
+          // Subcategorias
+          subCats.forEach(sub=>{
+            const subProds=sl.filter(p=>p.categoryId===sub.id);
+            const isSubExp=subCatExpanded.has(sub.id);
+            catView+=`<div>
+              <div onclick="toggleSubCat('${sub.id}')" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;padding:10px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;${isSubExp?'border-bottom-left-radius:0;border-bottom-right-radius:0':''}">
+                <span style="display:flex;align-items:center;gap:8px">
+                  <span style="font-size:12px;display:inline-block;transform:rotate(${isSubExp?'90':'0'}deg);transition:transform .2s;color:var(--txm)">▶</span>
+                  <span style="font-weight:600">${esc(sub.icon||'📂')} ${esc(sub.name)}</span>
+                </span>
+                ${renderCatSummary(subProds)}
+              </div>`;
+            if(isSubExp&&subProds.length){
+              catView+=`<div style="border:1px solid var(--bd);border-top:none;border-radius:0 0 6px 6px;overflow:hidden">
+                <table style="width:100%"><thead><tr>
+                  <th>Produto</th><th>Estoque</th><th>Custo Manual</th><th>Custo Médio</th><th>Modo</th><th>Valor Total</th><th></th>
+                </tr></thead><tbody>`;
+              subProds.forEach(p=>{catView+=prodRow(p,16);});
+              catView+=`</tbody></table></div>`;
+            }else if(isSubExp){
+              catView+=`<div style="padding:16px;text-align:center;color:var(--txd);font-size:12px;background:var(--sf2);border:1px solid var(--bd);border-top:none;border-radius:0 0 6px 6px">Nenhum produto nesta subcategoria</div>`;
+            }
+            catView+=`</div>`;
+          });
+
+          // Produtos diretos na categoria (sem subcategoria)
+          if(directProds.length){
+            catView+=`<div style="border:1px solid var(--bd);border-radius:6px;overflow:hidden">
+              <div style="padding:8px 14px;background:var(--sf3);font-size:11px;color:var(--txd);font-weight:600">SEM SUBCATEGORIA</div>
+              <table style="width:100%"><thead><tr>
+                <th>Produto</th><th>Estoque</th><th>Custo Manual</th><th>Custo Médio</th><th>Modo</th><th>Valor Total</th><th></th>
+              </tr></thead><tbody>`;
+            directProds.forEach(p=>{catView+=prodRow(p);});
+            catView+=`</tbody></table></div>`;
+          }
+          catView+=`</div>`;// close isExp
+        }
+        catView+=`</div>`;// close cat wrapper
+      });
+
+      // Produtos sem categoria
+      if(semCat.length){
+        const isExp=catExpanded.has('_sem');
+        catView+=`<div style="margin-bottom:10px">
+          <div onclick="toggleCat('_sem')" style="background:var(--sf2);border:1px dashed var(--bd);border-radius:8px;padding:12px 16px;cursor:pointer;display:flex;align-items:center;justify-content:space-between">
+            <span style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:14px;display:inline-block;transform:rotate(${isExp?'90':'0'}deg);color:var(--txd)">▶</span>
+              <span style="font-weight:600;color:var(--txd)">📦 Sem Categoria</span>
+            </span>
+            ${renderCatSummary(semCat)}
+          </div>`;
+        if(isExp){
+          catView+=`<div style="border:1px dashed var(--bd);border-top:none;border-radius:0 0 8px 8px;overflow:hidden">
+            <table style="width:100%"><thead><tr>
+              <th>Produto</th><th>Estoque</th><th>Custo Manual</th><th>Custo Médio</th><th>Modo</th><th>Valor Total</th><th></th>
+            </tr></thead><tbody>`;
+          semCat.forEach(p=>{catView+=prodRow(p);});
+          catView+=`</tbody></table></div>`;
+        }
+        catView+=`</div>`;
+      }
+    }
+  }
+
+  // ── Vista pedidos de compra ──
+  let poRows='';
+  if(estoqueTab==='compras'){
+    if(!state.purchaseOrders.length){poRows='<tr><td colspan="6"><div class="empty"><div class="empty-ic">🛒</div><p>Nenhum pedido</p></div></td></tr>';}
+    else{[...state.purchaseOrders].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).forEach(p=>{const sup=state.suppliers.find(s=>s.id===p.supplierId);const total=p.items.reduce((a,i)=>a+Number(i.qty||0)*Number(i.unitCost||0),0);const items=p.items.map(it=>{const prod=state.prods.find(x=>x.id===it.productId);return `<div style="font-size:11px;color:var(--txm)">${prod?esc(prod.name):'—'} x${it.qty}</div>`;}).join('');poRows+=`<tr><td style="color:var(--txd);font-size:11px">${p.date}</td><td style="font-weight:600">${esc(sup?sup.name:'—')}</td><td>${items}</td><td style="color:var(--or);font-weight:600">${fmtBRL(total)}</td><td><span class="${p.status==='recebido'?'badge b-gr':'badge b-or'}">${p.status==='recebido'?'Recebido':'Pendente'}</span></td><td>${p.status==='pendente'?`<button class="btn bgr2 sm" onclick="receivePO('${p.id}')">Receber</button>`:''}</td></tr>`;});}
+  }
+
+  const tabBtn=(id,label)=>`<button class="${estoqueTab===id?'btn bp':'btn bg2'}" onclick="estoqueTab='${id}';render()">${label}</button>`;
+
+  return `<div style="display:flex;gap:8px;margin-bottom:16px;align-items:center">
+    ${tabBtn('estoque','📋 Estoque')}
+    ${tabBtn('categorias','📁 Por Categoria')}
+    ${tabBtn('compras','🛒 Compras')}
+    ${estoqueTab==='categorias'?`<button class="btn bg2" style="margin-left:auto" onclick="openManageCats()">⚙️ Gerenciar Categorias</button>`:''}
+    ${estoqueTab==='compras'?`<button class="btn bp" style="margin-left:auto" onclick="openPOModal()">+ Pedido de Compra</button>`:''}
+  </div>
+  ${estoqueTab==='estoque'?`
+    <div class="g3" style="margin-bottom:16px">
+      <div class="card"><div class="ct">Valor em Estoque</div><div class="cv cv-or">${fmtBRL(totEst)}</div></div>
+      <div class="card"><div class="ct">Zerados</div><div class="cv cv-rd">${sl.filter(p=>p.quantity<=0).length}</div></div>
+      <div class="card"><div class="ct">Estoque Baixo</div><div class="cv" style="color:#f59e0b">${sl.filter(p=>p.quantity>0&&p.quantity<=5).length}</div></div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="tw"><table>
+        <thead><tr><th>Produto</th><th>Estoque</th><th>Custo Manual</th><th>Custo Médio</th><th>Modo</th><th>Valor Total</th><th></th></tr></thead>
+        <tbody>${prodRows}</tbody>
+      </table></div>
+    </div>`
+  :estoqueTab==='categorias'?catView
+  :`<div class="card" style="padding:0;overflow:hidden">
+      <div class="tw"><table>
+        <thead><tr><th>Data</th><th>Fornecedor</th><th>Itens</th><th>Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>${poRows}</tbody>
+      </table></div>
+    </div>`}`;
+}
+
+// ── Gerenciar Categorias ──
+function openManageCats(){
+  const cats=state.categories||[];
+  const roots=cats.filter(c=>!c.parentId);
+
+  let catList=roots.map(cat=>{
+    const subs=cats.filter(c=>c.parentId===cat.id);
+    return `<div style="margin-bottom:8px;background:var(--sf3);border:1px solid var(--bd);border-radius:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px">
+        <span style="display:flex;align-items:center;gap:8px">
+          <input value="${esc(cat.icon||'📁')}" onchange="updateCat('${cat.id}','icon',this.value)" style="width:40px;text-align:center;padding:4px;font-size:16px">
+          <strong>${esc(cat.name)}</strong>
+          <span style="color:var(--txd);font-size:11px">${subs.length} subcateg.</span>
+        </span>
+        <div style="display:flex;gap:6px">
+          <button class="btn bg2 sm" onclick="addSubCat('${cat.id}')">+ Sub</button>
+          <button class="btn bd2 sm" onclick="deleteCat('${cat.id}')">×</button>
+        </div>
+      </div>
+      ${subs.length?`<div style="padding:0 14px 10px;display:flex;flex-direction:column;gap:6px">
+        ${subs.map(sub=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--sf2);border-radius:6px;border:1px solid var(--bd)">
+          <span style="display:flex;align-items:center;gap:6px">
+            <input value="${esc(sub.icon||'📂')}" onchange="updateCat('${sub.id}','icon',this.value)" style="width:36px;text-align:center;padding:3px;font-size:14px">
+            <span style="font-size:12px">${esc(sub.name)}</span>
+          </span>
+          <button class="btn bd2 sm" onclick="deleteCat('${sub.id}')">×</button>
+        </div>`).join('')}
+      </div>`:''}
+    </div>`;
+  }).join('');
+
+  if(!catList) catList=`<div style="text-align:center;color:var(--txd);padding:20px;font-size:12px">Nenhuma categoria criada ainda</div>`;
+
+  const overlay=document.createElement('div');overlay.className='overlay';
+  overlay.innerHTML=`<div class="modal" style="max-width:520px">
+    <div class="mt2">⚙️ Gerenciar Categorias</div>
+    <div class="fg" style="max-height:60vh;overflow-y:auto">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="new-cat-icon" placeholder="📁" style="width:50px;text-align:center;font-size:18px">
+        <input id="new-cat-name" placeholder="Nome da categoria (ex: Eletrônicos)" style="flex:1">
+        <button class="btn bp sm" onclick="addRootCat()">+ Criar</button>
+      </div>
+      <div id="cat-list">${catList}</div>
+      <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--bd)">
+        <div style="font-size:11px;color:var(--txd);margin-bottom:10px;font-weight:600">ATRIBUIR CATEGORIA AOS PRODUTOS</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${state.prods.map(p=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--sf3);border-radius:6px">
+            <span style="font-size:12px;font-weight:500">${esc(p.name)}</span>
+            <select onchange="setProdCat('${p.id}',this.value)" style="font-size:11px;padding:4px 8px;width:auto">
+              <option value="">Sem categoria</option>
+              ${(state.categories||[]).map(c=>`<option value="${c.id}" ${p.categoryId===c.id?'selected':''}>${c.parentId?'　↳ ':''} ${esc(c.icon||'')} ${esc(c.name)}</option>`).join('')}
+            </select>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="mf"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Fechar</button></div>
+  </div>`;
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};
+  document.body.appendChild(overlay);
+}
+
+function addRootCat(){
+  const name=(document.getElementById('new-cat-name').value||'').trim();
+  const icon=(document.getElementById('new-cat-icon').value||'📁').trim();
+  if(!name)return;
+  state.categories=[...(state.categories||[]),{id:uid(),name,icon,parentId:null}];
+  save('categories');
+  document.querySelector('.overlay').remove();
+  openManageCats();
+}
+
+function addSubCat(parentId){
+  const name=prompt('Nome da subcategoria:');
+  if(!name)return;
+  const icon=prompt('Emoji/ícone (opcional, ex: 📱):','📂')||'📂';
+  state.categories=[...(state.categories||[]),{id:uid(),name:name.trim(),icon,parentId}];
+  save('categories');
+  document.querySelector('.overlay').remove();
+  openManageCats();
+}
+
+function updateCat(id,field,value){
+  state.categories=(state.categories||[]).map(c=>c.id===id?{...c,[field]:value}:c);
+  save('categories');
+}
+
+function deleteCat(id){
+  if(!confirm('Remover categoria? Os produtos atribuídos ficarão sem categoria.'))return;
+  state.categories=(state.categories||[]).filter(c=>c.id!==id&&c.parentId!==id);
+  state.prods=state.prods.map(p=>p.categoryId===id?{...p,categoryId:null}:p);
+  save('categories');save('prods');
+  document.querySelector('.overlay').remove();
+  openManageCats();
+}
+
+function setProdCat(prodId,catId){
+  state.prods=state.prods.map(p=>p.id===prodId?{...p,categoryId:catId||null}:p);
+  save('prods');
+}
 
 function toggleExpand(productId){
   if(estoqueExpanded.has(productId)){estoqueExpanded.delete(productId);}
@@ -2040,9 +2388,48 @@ function changePassword(){
   document.getElementById('conf-pass').value='';
   setTimeout(()=>{if(msg)msg.textContent='';},3000);
 }
+// ============ FORÇAR SINCRONIZAÇÃO ============
+async function forcSync(){
+  const btn = [...document.querySelectorAll('button')].find(b=>b.textContent.includes('Sincronizar'));
+  if(btn){ btn.textContent='⏳ Conectando...'; btn.disabled=true; }
+  setSyncStatus('syncing');
+
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+  try{
+    const results = await Promise.all(keys.map(async k=>{
+      const v = await dbGet(k);
+      return {k,v};
+    }));
+
+    results.forEach(({k,v})=>{
+      if(v===null) return;
+      if(k==='maqs'){
+        state[k]=v.map(m=>{
+          if(m.rates&&!m.rates.presencial){
+            const p={},l={};
+            for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}
+            return {...m,rates:{presencial:p,link:l}};
+          }
+          return m;
+        });
+      } else { state[k]=v; }
+      try{ localStorage.setItem('zb_cache_'+k, JSON.stringify(state[k])); }catch{}
+    });
+
+    setSyncStatus('ok');
+    render();
+    showToast('✅ Dados sincronizados com sucesso!','gr');
+  }catch(e){
+    setSyncStatus('error');
+    showToast('❌ Erro ao conectar. Tente novamente.','rd');
+  }finally{
+    if(btn){ btn.textContent='🔄 Sincronizar'; btn.disabled=false; }
+  }
+}
+
 // ============ BACKUP & RESTORE ============
 function exportBackup(){
-  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
   const backup={
     version: '2.0',
     exportedAt: new Date().toISOString(),
@@ -2083,7 +2470,7 @@ function importBackup(input){
       );
       if(!confirm_import){ input.value=''; return; }
 
-      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
       keys.forEach(k=>{
         if(backup.data[k] !== undefined){
           state[k] = backup.data[k];
@@ -2124,7 +2511,7 @@ function showToast(msg, type){
 setInterval(()=>{
   if(state.orders && state.orders.length > 0){
     try{
-      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
       const backup={version:'2.0',exportedAt:new Date().toISOString(),data:{}};
       keys.forEach(k=>{backup.data[k]=state[k];});
       localStorage.setItem('zb_backup_auto', JSON.stringify(backup));
