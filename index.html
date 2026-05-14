@@ -1215,31 +1215,36 @@ function saveNF(existingId){
 let estoqueChartInst=null;
 function initEstoqueChart(){
   const canvas=document.getElementById('cat-chart');
-  if(!canvas)return;
+  if(!canvas||typeof Chart==='undefined')return;
   const cats=state.categories||[];
   const sl=state.prods.map(p=>({...p,...getStockForProd(p)}));
   const data=cats.filter(c=>!c.parentId).map(cat=>{
     const subIds=[cat.id,...cats.filter(c=>c.parentId===cat.id).map(c=>c.id)];
     const prods=sl.filter(p=>subIds.includes(p.categoryId));
-    return {name:(cat.icon||'')+' '+cat.name,custo:prods.reduce((a,p)=>a+p.quantity*p.cost,0),venda:prods.reduce((a,p)=>a+p.quantity*(Number(p.salePrice)||0),0)};
+    return {name:(cat.name.length>12?cat.name.slice(0,12)+'…':cat.name),custo:Math.round(prods.reduce((a,p)=>a+p.quantity*p.cost,0)),venda:Math.round(prods.reduce((a,p)=>a+p.quantity*(Number(p.salePrice)||0),0))};
   }).filter(d=>d.custo>0||d.venda>0);
   if(!data.length)return;
-  if(estoqueChartInst)estoqueChartInst.destroy();
+  if(estoqueChartInst){estoqueChartInst.destroy();estoqueChartInst=null;}
+  Chart.defaults.color='#666';
   estoqueChartInst=new Chart(canvas,{
     type:'bar',
     data:{
       labels:data.map(d=>d.name),
       datasets:[
-        {label:'Custo',data:data.map(d=>d.custo),backgroundColor:'rgba(249,115,22,.7)',borderRadius:4},
-        {label:'Venda',data:data.map(d=>d.venda),backgroundColor:'rgba(34,197,94,.5)',borderRadius:4}
+        {label:'Custo (R$)',data:data.map(d=>d.custo),backgroundColor:'rgba(249,115,22,.8)',hoverBackgroundColor:'rgba(249,115,22,1)',borderRadius:3,borderSkipped:false},
+        {label:'Venda (R$)',data:data.map(d=>d.venda),backgroundColor:'rgba(34,197,94,.6)',hoverBackgroundColor:'rgba(34,197,94,.9)',borderRadius:3,borderSkipped:false}
       ]
     },
     options:{
       responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{labels:{color:'#888',font:{size:11}}},tooltip:{callbacks:{label:ctx=>' R$ '+Number(ctx.raw).toLocaleString('pt-BR',{minimumFractionDigits:2})}}},
+      animation:{duration:400},
+      plugins:{
+        legend:{position:'bottom',labels:{color:'#777',font:{size:10},boxWidth:12,padding:8}},
+        tooltip:{backgroundColor:'#1c1c1c',borderColor:'rgba(255,255,255,.1)',borderWidth:1,titleColor:'#f0f0f0',bodyColor:'#888',callbacks:{label:ctx=>' R$ '+Number(ctx.raw).toLocaleString('pt-BR',{minimumFractionDigits:0})}}
+      },
       scales:{
-        x:{ticks:{color:'#666',font:{size:10}},grid:{color:'rgba(255,255,255,.04)'}},
-        y:{ticks:{color:'#666',font:{size:10},callback:v=>'R$ '+Number(v).toLocaleString('pt-BR',{notation:'compact'})},grid:{color:'rgba(255,255,255,.04)'}}
+        x:{ticks:{color:'#555',font:{size:10}},grid:{color:'rgba(255,255,255,.04)',drawBorder:false},border:{display:false}},
+        y:{ticks:{color:'#555',font:{size:9},callback:v=>'R$'+Number(v).toLocaleString('pt-BR',{notation:'compact',maximumFractionDigits:0})},grid:{color:'rgba(255,255,255,.06)',drawBorder:false},border:{display:false}}
       }
     }
   });
@@ -1262,6 +1267,7 @@ function toggleSubCat(id){if(subCatExpanded.has(id)){subCatExpanded.delete(id);}
 function getStockForProd(p){
   const sIdx=state.stock.findIndex(x=>x.productId===p.id);
   let s=sIdx>=0?{...state.stock[sIdx]}:{productId:p.id,quantity:0,avgCost:0,movements:[],variations:[]};
+  const existingQty=Number(s.quantity||0);
 
   // Auto-sync variações do produto (tipo 'variacao') para o estoque
   if(p.tipo==='variacao'&&p.variacoes&&p.variacoes.length>0){
@@ -1277,8 +1283,8 @@ function getStockForProd(p){
       });
     });
     if(changed){
-      if(sIdx>=0){state.stock[sIdx].variations=existingVars;state.stock[sIdx].quantity=existingVars.reduce((a,v)=>a+Number(v.quantity||0),0);}
-      else{const ns={productId:p.id,quantity:0,avgCost:0,movements:[],variations:existingVars};state.stock.push(ns);}
+      if(sIdx>=0){state.stock[sIdx].variations=existingVars;}
+      else{state.stock.push({productId:p.id,quantity:existingQty,avgCost:0,movements:[],variations:existingVars});}
       try{localStorage.setItem('zb_cache_stock',JSON.stringify(state.stock));}catch{}
       clearTimeout(saveTimers['stock_auto']);
       saveTimers['stock_auto']=setTimeout(()=>dbSet('stock',state.stock),2000);
@@ -1287,7 +1293,9 @@ function getStockForProd(p){
   }
 
   const vars=s.variations||[];
-  const totalQty=vars.length>0?vars.reduce((a,v)=>a+Number(v.quantity||0),0):Number(s.quantity||0);
+  const varSum=vars.reduce((a,v)=>a+Number(v.quantity||0),0);
+  // Preserva qty original se variações ainda não foram distribuídas (todas zeradas)
+  const totalQty=vars.length>0?(varSum>0?varSum:existingQty):existingQty;
   const cost=p.costMode==='avg'&&Number(s.avgCost)>0?Number(s.avgCost):Number(p.costPrice||0);
   return {...s,variations:vars,quantity:totalQty,cost};
 }
@@ -1627,7 +1635,7 @@ function renderEstoque(){
       <div class="card">
         <div class="ct" style="margin-bottom:12px">📊 Valor por Categoria</div>
         ${catChartData.length>0
-          ?`<canvas id="cat-chart" height="160"></canvas>`
+          ?`<div style="position:relative;height:155px"><canvas id="cat-chart"></canvas></div>`
           :`<div style="display:flex;flex-direction:column;gap:8px">${sl.slice(0,5).map(p=>{
               const pct=totEst>0?Math.round(p.quantity*p.cost/totEst*100):0;
               return `<div>
