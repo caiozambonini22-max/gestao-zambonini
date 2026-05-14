@@ -137,7 +137,7 @@ select option{background:var(--sf2);}
 
 <div id="loading-screen">
   <div class="logo-l">GESTAO ZAMBONINI</div>
-  <div class="sub-l" id="loading-msg">Conectando ao Supabase...</div>
+  <div class="sub-l" id="loading-msg">Iniciando...</div>
 </div>
 
 <div class="app" id="app" style="display:none;">
@@ -153,7 +153,11 @@ select option{background:var(--sf2);}
     <button class="ni" onclick="setTab('cadastros')" id="nav-cadastros">👥 Cadastros</button>
     <button class="ni" onclick="setTab('metricas')" id="nav-metricas">📊 Metricas</button>
     <button class="ni" onclick="setTab('config')" id="nav-config">Config</button>
-    <div class="topnav-r"><button class="btn bg2 sm" onclick="logout()" style="font-size:11px;padding:4px 10px">Sair</button>
+    <div class="topnav-r">
+      <button class="btn bg2 sm" onclick="exportBackup()" title="Exportar backup dos dados" style="font-size:11px;padding:4px 10px">💾 Backup</button>
+      <button class="btn bg2 sm" onclick="document.getElementById('import-input').click()" title="Importar backup" style="font-size:11px;padding:4px 10px">📂 Importar</button>
+      <input id="import-input" type="file" accept=".json" style="display:none" onchange="importBackup(this)">
+      <button class="btn bg2 sm" onclick="logout()" style="font-size:11px;padding:4px 10px">Sair</button>
       <span id="sync-status" style="font-size:11px;color:var(--txd);display:flex;align-items:center;gap:5px;"><span class="sync-dot" id="sync-dot"></span><span id="sync-txt">Sincronizado</span></span>
     </div>
   </nav>
@@ -336,9 +340,52 @@ function doLogin(){
 async function loadAll(){
   document.getElementById('loading-msg').textContent='Carregando dados...';
   const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
-  for(const k of keys){
-    const v=await dbGet(k);
-    if(v!==null){
+
+  // ── Mostra dados em cache imediatamente (sem esperar Supabase) ──
+  let hasCached = false;
+  keys.forEach(k=>{
+    try{
+      const cached = localStorage.getItem('zb_cache_'+k);
+      if(cached){
+        const v = JSON.parse(cached);
+        if(k==='maqs'){
+          state[k]=v.map(m=>{
+            if(m.rates&&!m.rates.presencial){
+              const p={},l={};
+              for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}
+              return {...m,rates:{presencial:p,link:l}};
+            }
+            return m;
+          });
+        } else { state[k]=v; }
+        hasCached=true;
+      }
+    }catch{}
+  });
+
+  // Se tem cache, mostra o app imediatamente e atualiza em background
+  if(hasCached){
+    document.getElementById('loading-screen').style.display='none';
+    document.getElementById('app').style.display='flex';
+    render();
+  }
+
+  // ── Busca Supabase em paralelo (muito mais rápido) ──
+  try{
+    const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),6000));
+    const fetchAll = Promise.all(keys.map(async k=>{
+      const v = await dbGet(k);
+      if(v!==null){
+        // Salva cache local
+        try{ localStorage.setItem('zb_cache_'+k, JSON.stringify(v)); }catch{}
+        return {k,v};
+      }
+      return {k,v:null};
+    }));
+
+    const results = await Promise.race([fetchAll, timeout]);
+    results.forEach(({k,v})=>{
+      if(v===null) return;
       if(k==='maqs'){
         state[k]=v.map(m=>{
           if(m.rates&&!m.rates.presencial){
@@ -348,11 +395,13 @@ async function loadAll(){
           }
           return m;
         });
-      } else {
-        state[k]=v;
-      }
-    }
+      } else { state[k]=v; }
+    });
+  }catch(e){
+    // Timeout ou erro: se não tinha cache, mostra app vazio mesmo assim
+    setSyncStatus('error');
   }
+
   document.getElementById('loading-screen').style.display='none';
   document.getElementById('app').style.display='flex';
   render();
@@ -1141,30 +1190,246 @@ function saveNF(existingId){
 
 // ============ ESTOQUE ============
 let estoqueTab='estoque';
+let estoqueExpanded=new Set();
+
+function toggleExpand(productId){
+  if(estoqueExpanded.has(productId)){estoqueExpanded.delete(productId);}
+  else{estoqueExpanded.add(productId);}
+  render();
+}
+
 function renderEstoque(){
-  const sl=state.prods.map(p=>{const s=state.stock.find(x=>x.productId===p.id)||{productId:p.id,quantity:0,avgCost:0,movements:[]};return {...p,...s};});
+  const sl=state.prods.map(p=>{
+    const s=state.stock.find(x=>x.productId===p.id)||{productId:p.id,quantity:0,avgCost:0,movements:[],variations:[]};
+    const vars=s.variations||[];
+    const totalQty=vars.length>0?vars.reduce((a,v)=>a+Number(v.quantity||0),0):s.quantity;
+    return {...p,...s,variations:vars,quantity:totalQty};
+  });
+
   const totEst=sl.reduce((a,p)=>{const c=p.costMode==='avg'&&p.avgCost>0?p.avgCost:Number(p.costPrice||0);return a+p.quantity*c;},0);
+
   let rows='';
-  sl.forEach(p=>{const c=p.costMode==='avg'&&p.avgCost>0?p.avgCost:Number(p.costPrice||0);rows+=`<tr><td style="font-weight:600">${esc(p.name)}</td><td><span class="${p.quantity>5?'s-ok':p.quantity>0?'s-low':'s-zero'}">${p.quantity} un.</span></td><td style="color:var(--txm)">${fmtBRL(p.costPrice)}</td><td style="color:${p.avgCost>0?'var(--or)':'var(--txd)'};font-weight:${p.avgCost>0?600:400}">${p.avgCost>0?fmtBRL(p.avgCost):'—'}</td><td><span class="${p.costMode==='avg'?'badge b-gr':'badge b-bl'}">${p.costMode==='avg'?'Auto':'Manual'}</span></td><td>${fmtBRL(p.quantity*c)}</td><td><button class="btn bg2 sm" onclick="openAdjModal('${p.id}')">Ajustar</button></td></tr>`;});
+  sl.forEach(p=>{
+    const c=p.costMode==='avg'&&p.avgCost>0?p.avgCost:Number(p.costPrice||0);
+    const hasVars=p.variations&&p.variations.length>0;
+    const expanded=estoqueExpanded.has(p.id);
+    const qClass=p.quantity>5?'s-ok':p.quantity>0?'s-low':'s-zero';
+
+    // Linha do produto pai
+    rows+=`<tr style="cursor:pointer" onclick="toggleExpand('${p.id}')">
+      <td style="font-weight:700">
+        <span style="display:inline-flex;align-items:center;gap:8px">
+          <span style="font-size:11px;color:var(--or);transition:transform .2s;display:inline-block;transform:rotate(${expanded?'90deg':'0deg'})">${hasVars?'▶':'　'}</span>
+          ${esc(p.name)}
+          ${hasVars?`<span style="background:var(--sf3);border:1px solid var(--bd);border-radius:10px;font-size:10px;color:var(--txd);padding:1px 7px">${p.variations.length} var.</span>`:''}
+        </span>
+      </td>
+      <td><span class="${qClass}">${p.quantity} un.</span></td>
+      <td style="color:var(--txm)">${fmtBRL(p.costPrice)}</td>
+      <td style="color:${p.avgCost>0?'var(--or)':'var(--txd)'};font-weight:${p.avgCost>0?600:400}">${p.avgCost>0?fmtBRL(p.avgCost):'—'}</td>
+      <td><span class="${p.costMode==='avg'?'badge b-gr':'badge b-bl'}">${p.costMode==='avg'?'Auto':'Manual'}</span></td>
+      <td style="font-weight:700;color:var(--or)">${fmtBRL(p.quantity*c)}</td>
+      <td onclick="event.stopPropagation()">
+        <div style="display:flex;gap:5px">
+          <button class="btn bg2 sm" onclick="openManageVars('${p.id}')">Variações</button>
+          ${!hasVars?`<button class="btn bg2 sm" onclick="openAdjModal('${p.id}',null)">Ajustar</button>`:''}
+        </div>
+      </td>
+    </tr>`;
+
+    // Linhas das variações (se expandido)
+    if(expanded&&hasVars){
+      p.variations.forEach(v=>{
+        const vq=Number(v.quantity||0);
+        const vClass=vq>5?'s-ok':vq>0?'s-low':'s-zero';
+        rows+=`<tr style="background:rgba(255,101,0,.04)">
+          <td style="padding-left:42px;color:var(--txm);font-size:13px">
+            <span style="color:var(--bd);margin-right:6px">└</span>${esc(v.name)}
+          </td>
+          <td><span class="${vClass}">${vq} un.</span></td>
+          <td style="color:var(--txd);font-size:12px">—</td>
+          <td style="color:var(--txd);font-size:12px">—</td>
+          <td></td>
+          <td style="color:var(--txm)">${fmtBRL(vq*c)}</td>
+          <td><button class="btn bg2 sm" onclick="openAdjModal('${p.id}','${v.id}')">Ajustar</button></td>
+        </tr>`;
+      });
+    }
+  });
+
   let poRows='';
-  if(estoqueTab==='compras'){if(!state.purchaseOrders.length){poRows='<tr><td colspan="6"><div class="empty"><div class="empty-ic">🛒</div><p>Nenhum pedido</p></div></td></tr>';}else{[...state.purchaseOrders].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).forEach(p=>{const sup=state.suppliers.find(s=>s.id===p.supplierId);const total=p.items.reduce((a,i)=>a+Number(i.qty||0)*Number(i.unitCost||0),0);const items=p.items.map(it=>{const prod=state.prods.find(x=>x.id===it.productId);return `<div style="font-size:11px;color:var(--txm)">${prod?esc(prod.name):'—'} x${it.qty}</div>`;}).join('');poRows+=`<tr><td style="color:var(--txd);font-size:11px">${p.date}</td><td style="font-weight:600">${esc(sup?sup.name:'—')}</td><td>${items}</td><td style="color:var(--or);font-weight:600">${fmtBRL(total)}</td><td><span class="${p.status==='recebido'?'badge b-gr':'badge b-or'}">${p.status==='recebido'?'Recebido':'Pendente'}</span></td><td>${p.status==='pendente'?`<button class="btn bgr2 sm" onclick="receivePO('${p.id}')">Receber</button>`:''}</td></tr>`;});}}
-  return `<div style="display:flex;gap:8px;margin-bottom:16px"><button class="${estoqueTab==='estoque'?'btn bp':'btn bg2'}" onclick="estoqueTab='estoque';render()">Estoque</button><button class="${estoqueTab==='compras'?'btn bp':'btn bg2'}" onclick="estoqueTab='compras';render()">Pedidos de Compra</button><button class="btn bp" style="margin-left:auto" onclick="openPOModal()">+ Pedido de Compra</button></div>
-  ${estoqueTab==='estoque'?`<div class="g3" style="margin-bottom:16px"><div class="card"><div class="ct">Valor em Estoque</div><div class="cv cv-or">${fmtBRL(totEst)}</div></div><div class="card"><div class="ct">Zerados</div><div class="cv cv-rd">${sl.filter(p=>p.quantity<=0).length}</div></div><div class="card"><div class="ct">Estoque Baixo</div><div class="cv" style="color:#f59e0b">${sl.filter(p=>p.quantity>0&&p.quantity<=5).length}</div></div></div><div class="card" style="padding:0;overflow:hidden"><div class="tw"><table><thead><tr><th>Produto</th><th>Estoque</th><th>Custo Manual</th><th>Custo Medio</th><th>Modo</th><th>Valor Total</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`:`<div class="card" style="padding:0;overflow:hidden"><div class="tw"><table><thead><tr><th>Data</th><th>Fornecedor</th><th>Itens</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>${poRows}</tbody></table></div></div>`}`;
+  if(estoqueTab==='compras'){
+    if(!state.purchaseOrders.length){
+      poRows='<tr><td colspan="6"><div class="empty"><div class="empty-ic">🛒</div><p>Nenhum pedido</p></div></td></tr>';
+    }else{
+      [...state.purchaseOrders].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).forEach(p=>{
+        const sup=state.suppliers.find(s=>s.id===p.supplierId);
+        const total=p.items.reduce((a,i)=>a+Number(i.qty||0)*Number(i.unitCost||0),0);
+        const items=p.items.map(it=>{const prod=state.prods.find(x=>x.id===it.productId);return `<div style="font-size:11px;color:var(--txm)">${prod?esc(prod.name):'—'} x${it.qty}</div>`;}).join('');
+        poRows+=`<tr><td style="color:var(--txd);font-size:11px">${p.date}</td><td style="font-weight:600">${esc(sup?sup.name:'—')}</td><td>${items}</td><td style="color:var(--or);font-weight:600">${fmtBRL(total)}</td><td><span class="${p.status==='recebido'?'badge b-gr':'badge b-or'}">${p.status==='recebido'?'Recebido':'Pendente'}</span></td><td>${p.status==='pendente'?`<button class="btn bgr2 sm" onclick="receivePO('${p.id}')">Receber</button>`:''}</td></tr>`;
+      });
+    }
+  }
+
+  return `<div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="${estoqueTab==='estoque'?'btn bp':'btn bg2'}" onclick="estoqueTab='estoque';render()">Estoque</button>
+    <button class="${estoqueTab==='compras'?'btn bp':'btn bg2'}" onclick="estoqueTab='compras';render()">Pedidos de Compra</button>
+    <button class="btn bp" style="margin-left:auto" onclick="openPOModal()">+ Pedido de Compra</button>
+  </div>
+  ${estoqueTab==='estoque'?`
+    <div class="g3" style="margin-bottom:16px">
+      <div class="card"><div class="ct">Valor em Estoque</div><div class="cv cv-or">${fmtBRL(totEst)}</div></div>
+      <div class="card"><div class="ct">Zerados</div><div class="cv cv-rd">${sl.filter(p=>p.quantity<=0).length}</div></div>
+      <div class="card"><div class="ct">Estoque Baixo</div><div class="cv" style="color:#f59e0b">${sl.filter(p=>p.quantity>0&&p.quantity<=5).length}</div></div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="tw"><table>
+        <thead><tr><th>Produto</th><th>Estoque</th><th>Custo Manual</th><th>Custo Medio</th><th>Modo</th><th>Valor Total</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>
+  `:`
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="tw"><table>
+        <thead><tr><th>Data</th><th>Fornecedor</th><th>Itens</th><th>Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>${poRows}</tbody>
+      </table></div>
+    </div>
+  `}`;
 }
-function openAdjModal(productId){
-  const p=state.prods.find(x=>x.id===productId);const s=state.stock.find(x=>x.productId===productId)||{quantity:0,avgCost:0};
+
+// Gerenciar variações do produto no estoque
+function openManageVars(productId){
+  const p=state.prods.find(x=>x.id===productId);
+  const sIdx=state.stock.findIndex(x=>x.productId===productId);
+  const s=sIdx>=0?state.stock[sIdx]:{productId,quantity:0,avgCost:0,movements:[],variations:[]};
+  const vars=s.variations||[];
+
+  let varRows=vars.map(v=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--sf3);border-radius:6px;margin-bottom:6px" id="var-row-${v.id}">
+      <span style="flex:1;font-size:13px">${esc(v.name)}</span>
+      <span style="color:${Number(v.quantity)>0?'var(--gr)':'var(--rd)'};font-weight:700;font-size:13px;min-width:50px;text-align:right">${v.quantity} un.</span>
+      <button class="btn bd2 sm" onclick="removeVar('${productId}','${v.id}')">×</button>
+    </div>`).join('');
+
   const overlay=document.createElement('div');overlay.className='overlay';
-  overlay.innerHTML=`<div class="modal modal-sm"><div class="mt2">Ajustar Estoque - ${esc(p?p.name:'')}</div><div class="fg"><div style="padding:8px 12px;background:var(--sf3);border-radius:7px;font-size:12px">Atual: <strong>${s.quantity} un.</strong> · C.Medio: <strong style="color:var(--or)">${fmtBRL(s.avgCost)}</strong></div><div class="fr"><div class="field"><label>Qtd (+ ou -)</label><input type="number" id="adj-qty" placeholder="Ex: 10 ou -3"></div><div class="field"><label>Custo unit.</label><div class="ip"><span class="ips">R$</span><input type="number" id="adj-cost" placeholder="0,00"></div></div></div><div class="field"><label>Motivo</label><input id="adj-note" placeholder="Inventario, devolucao..."></div></div><div class="mf"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button><button class="btn bp" onclick="applyAdj('${productId}')">Aplicar</button></div></div>`;
-  overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};document.body.appendChild(overlay);
+  overlay.innerHTML=`<div class="modal modal-sm">
+    <div class="mt2">Variações — ${esc(p?p.name:'')}</div>
+    <div class="fg">
+      <div style="font-size:11px;color:var(--txd);margin-bottom:10px">Clique em "Ajustar" na linha da variação para alterar o estoque de cada uma.</div>
+      <div id="var-list">${varRows||'<div style="text-align:center;color:var(--txd);font-size:12px;padding:16px">Nenhuma variação. Adicione abaixo.</div>'}</div>
+      <div style="border-top:1px solid var(--bd);padding-top:12px;margin-top:4px">
+        <div style="font-size:12px;color:var(--txd);margin-bottom:8px;font-weight:600">ADICIONAR VARIAÇÃO</div>
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div class="field" style="flex:2;margin:0"><label>Nome</label><input id="new-var-name" placeholder="Ex: Prata, Preto, 42mm..."></div>
+          <div class="field" style="flex:1;margin:0"><label>Qtd inicial</label><input type="number" id="new-var-qty" value="0"></div>
+          <button class="btn bp sm" onclick="addVar('${productId}')">+ Add</button>
+        </div>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn bg2" onclick="this.closest('.overlay').remove()">Fechar</button>
+    </div>
+  </div>`;
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};
+  document.body.appendChild(overlay);
 }
-function applyAdj(productId){
-  const qty=Number(document.getElementById('adj-qty').value);const cost=Number(document.getElementById('adj-cost').value||0);const note=document.getElementById('adj-note').value;
+
+function addVar(productId){
+  const name=(document.getElementById('new-var-name').value||'').trim();
+  const qty=Number(document.getElementById('new-var-qty').value||0);
+  if(!name)return;
+  const sIdx=state.stock.findIndex(x=>x.productId===productId);
+  const newVar={id:uid(),name,quantity:qty};
+  if(sIdx>=0){
+    state.stock[sIdx].variations=[...(state.stock[sIdx].variations||[]),newVar];
+    state.stock[sIdx].quantity=state.stock[sIdx].variations.reduce((a,v)=>a+Number(v.quantity||0),0);
+  }else{
+    state.stock.push({productId,quantity:qty,avgCost:0,movements:[],variations:[newVar]});
+  }
+  save('stock');
+  document.querySelector('.overlay').remove();
+  openManageVars(productId);
+}
+
+function removeVar(productId,varId){
+  if(!confirm('Remover variação?'))return;
+  const sIdx=state.stock.findIndex(x=>x.productId===productId);
+  if(sIdx<0)return;
+  state.stock[sIdx].variations=(state.stock[sIdx].variations||[]).filter(v=>v.id!==varId);
+  state.stock[sIdx].quantity=state.stock[sIdx].variations.reduce((a,v)=>a+Number(v.quantity||0),0);
+  save('stock');
+  document.querySelector('.overlay').remove();
+  estoqueExpanded.add(productId);
+  render();
+}
+
+function openAdjModal(productId,varId){
+  const p=state.prods.find(x=>x.id===productId);
+  const s=state.stock.find(x=>x.productId===productId)||{quantity:0,avgCost:0,variations:[]};
+  const v=varId?(s.variations||[]).find(x=>x.id===varId):null;
+  const curQty=v?v.quantity:s.quantity;
+  const label=v?`${esc(p?p.name:'')} — ${esc(v.name)}`:esc(p?p.name:'');
+
+  const overlay=document.createElement('div');overlay.className='overlay';
+  overlay.innerHTML=`<div class="modal modal-sm">
+    <div class="mt2">Ajustar Estoque${v?' (Variação)':''}</div>
+    <div class="fg">
+      <div style="padding:8px 12px;background:var(--sf3);border-radius:7px;font-size:12px;margin-bottom:10px">
+        <strong>${label}</strong><br>
+        Atual: <strong>${curQty} un.</strong>${!v?` · C.Médio: <strong style="color:var(--or)">${fmtBRL(s.avgCost)}</strong>`:''}
+      </div>
+      <div class="fr">
+        <div class="field"><label>Qtd (+ adicionar / - remover)</label><input type="number" id="adj-qty" placeholder="Ex: 10 ou -3"></div>
+        ${!v?`<div class="field"><label>Custo unit. (opcional)</label><div class="ip"><span class="ips">R$</span><input type="number" id="adj-cost" placeholder="0,00"></div></div>`:''}
+      </div>
+      <div class="field"><label>Motivo</label><input id="adj-note" placeholder="Inventário, devolução, venda manual..."></div>
+    </div>
+    <div class="mf">
+      <button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button>
+      <button class="btn bp" onclick="applyAdj('${productId}','${varId||''}')">Aplicar</button>
+    </div>
+  </div>`;
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};
+  document.body.appendChild(overlay);
+}
+
+function applyAdj(productId,varId){
+  const qty=Number(document.getElementById('adj-qty').value);
+  const costEl=document.getElementById('adj-cost');
+  const cost=costEl?Number(costEl.value||0):0;
+  const note=document.getElementById('adj-note').value;
   if(!qty)return;
+
   const idx=state.stock.findIndex(s=>s.productId===productId);
   const mvt={date:new Date().toISOString().slice(0,10),type:qty>0?'entrada':'saida',qty,cost,note};
-  if(idx>=0){const cur=state.stock[idx];const nq=cur.quantity+qty;const na=qty>0&&cost>0?calcAvg(cur.quantity,cur.avgCost,qty,cost):cur.avgCost;state.stock[idx]={...cur,quantity:Math.max(0,nq),avgCost:na,movements:[mvt,...(cur.movements||[])]};}
-  else{state.stock.push({productId,quantity:Math.max(0,qty),avgCost:cost,movements:[mvt]});}
-  save('stock');document.querySelector('.overlay').remove();render();
+
+  if(varId){
+    // Ajusta variação específica
+    if(idx>=0){
+      const vars=state.stock[idx].variations||[];
+      const vIdx=vars.findIndex(v=>v.id===varId);
+      if(vIdx>=0){vars[vIdx].quantity=Math.max(0,Number(vars[vIdx].quantity||0)+qty);}
+      state.stock[idx].variations=vars;
+      state.stock[idx].quantity=vars.reduce((a,v)=>a+Number(v.quantity||0),0);
+      state.stock[idx].movements=[mvt,...(state.stock[idx].movements||[])];
+    }
+  }else{
+    // Ajusta produto sem variações
+    if(idx>=0){
+      const cur=state.stock[idx];
+      const nq=cur.quantity+qty;
+      const na=qty>0&&cost>0?calcAvg(cur.quantity,cur.avgCost,qty,cost):cur.avgCost;
+      state.stock[idx]={...cur,quantity:Math.max(0,nq),avgCost:na,movements:[mvt,...(cur.movements||[])]};
+    }else{
+      state.stock.push({productId,quantity:Math.max(0,qty),avgCost:cost,movements:[mvt],variations:[]});
+    }
+  }
+
+  save('stock');
+  document.querySelector('.overlay').remove();
+  estoqueExpanded.add(productId);
+  render();
 }
 function receivePO(pid){
   const order=state.purchaseOrders.find(p=>p.id===pid);if(!order)return;
@@ -1775,8 +2040,100 @@ function changePassword(){
   document.getElementById('conf-pass').value='';
   setTimeout(()=>{if(msg)msg.textContent='';},3000);
 }
+// ============ BACKUP & RESTORE ============
+function exportBackup(){
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+  const backup={
+    version: '2.0',
+    exportedAt: new Date().toISOString(),
+    exportedBy: 'Gestao Zambonini',
+    data: {}
+  };
+  keys.forEach(k=>{ backup.data[k]=state[k]; });
+
+  // Salva também no localStorage como backup automático
+  try{ localStorage.setItem('zb_backup_auto', JSON.stringify({...backup, exportedAt: new Date().toISOString()})); }catch{}
+
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const date = new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
+  a.href = url;
+  a.download = `zambonini-backup-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  // Mostra confirmação
+  showToast('✅ Backup exportado com sucesso!', 'gr');
+}
+
+function importBackup(input){
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e)=>{
+    try{
+      const backup = JSON.parse(e.target.result);
+      if(!backup.data) throw new Error('Arquivo inválido');
+
+      const confirm_import = confirm(
+        `Importar backup de ${backup.exportedAt ? new Date(backup.exportedAt).toLocaleString('pt-BR') : 'data desconhecida'}?\n\n` +
+        `Isso vai substituir TODOS os dados atuais.\n\n` +
+        `Clique OK para confirmar.`
+      );
+      if(!confirm_import){ input.value=''; return; }
+
+      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+      keys.forEach(k=>{
+        if(backup.data[k] !== undefined){
+          state[k] = backup.data[k];
+        }
+      });
+
+      // Salva tudo no Supabase
+      setSyncStatus('syncing');
+      await Promise.all(keys.map(k => dbSet(k, state[k])));
+      setSyncStatus('ok');
+
+      // Atualiza cache local
+      keys.forEach(k=>{ try{ localStorage.setItem('zb_cache_'+k, JSON.stringify(state[k])); }catch{} });
+
+      input.value='';
+      render();
+      showToast('✅ Backup importado com sucesso!', 'gr');
+    }catch(err){
+      alert('Erro ao importar: ' + err.message);
+      input.value='';
+    }
+  };
+  reader.readAsText(file);
+}
+
+function showToast(msg, type){
+  const existing = document.getElementById('zb-toast');
+  if(existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'zb-toast';
+  toast.style.cssText = `position:fixed;bottom:24px;right:24px;background:${type==='gr'?'rgba(34,197,94,.15)':'rgba(239,68,68,.15)'};border:1px solid ${type==='gr'?'rgba(34,197,94,.4)':'rgba(239,68,68,.4)'};color:${type==='gr'?'#22c55e':'#ef4444'};padding:12px 20px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,.4);`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(()=>toast.remove(), 3500);
+}
+
+// Auto-backup no localStorage a cada 10 minutos
+setInterval(()=>{
+  if(state.orders && state.orders.length > 0){
+    try{
+      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients'];
+      const backup={version:'2.0',exportedAt:new Date().toISOString(),data:{}};
+      keys.forEach(k=>{backup.data[k]=state[k];});
+      localStorage.setItem('zb_backup_auto', JSON.stringify(backup));
+    }catch{}
+  }
+}, 10 * 60 * 1000);
+
 // ============ INIT ============
-loadAll();
+if(checkSession()){loadAll();}else{showLoginScreen();}
 </script>
 </body>
 </html>
