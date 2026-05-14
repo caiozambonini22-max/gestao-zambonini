@@ -1031,11 +1031,15 @@ function renderDeliverySection(o){
     var mbOpts='<option value="">Selecione...</option>';
     state.motoboys.forEach(function(m){mbOpts+='<option value="'+m.id+'"'+(o.motoboyId===m.id?' selected':'')+'>'+esc(m.name)+'</option>';});
     mbOpts+='<option value="_avulso"'+(o.motoboyId==='_avulso'?' selected':'')+'>Avulso (digitar)</option>';
-    html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">';
+    var horarios=['','11h','12h','13h','14h','15h','16h','17h','18h','19h','20h','21h','22h','Negociar','Sem prazo'];
+    var horOpts=horarios.map(function(h){return'<option value="'+h+'"'+(o.deliveryUntil===h?' selected':'')+'>'+( h||'— Até que horas? —')+'</option>';}).join('');
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 100px 100px;gap:8px">';
     html+='<div class="field"><label>Motoboy</label><select onchange="setOrderField(\'motoboyId\',this.value);var mb=state.motoboys.find(x=>x.id===this.value);if(mb)setOrderField(\'motoboyName\',mb.name);refreshDelivery()">'+mbOpts+'</select></div>';
     html+=(o.motoboyId==='_avulso'?'<div class="field"><label>Nome</label><input value="'+esc(o.motoboyName||'')+'" oninput="setOrderField(\'motoboyName\',this.value)" placeholder="Nome do motoboy"></div>':'<div></div>');
     html+='<div class="field"><label>Valor Frete</label><div class="ip"><span class="ips">R$</span><input type="number" value="'+(o.motoboyCost||'')+'" oninput="setOrderField(\'motoboyCost\',this.value);updateOrderSummary()" placeholder="0,00"></div></div>';
     html+='<div class="field"><label>Rastreio/Info</label><input value="'+esc(o.trackingCode||'')+'" oninput="setOrderField(\'trackingCode\',this.value)"></div>';
+    html+='<div class="field"><label>🕐 Entregar até</label><select onchange="setOrderField(\'deliveryUntil\',this.value)">'+horOpts+'</select></div>';
+    html+='<div class="field"><label>🛍 Sacolas</label><select onchange="setOrderField(\'numSacolas\',this.value)"><option value="">—</option><option value="1" '+(o.numSacolas==='1'?'selected':'')+'>1 sacola</option><option value="2" '+(o.numSacolas==='2'?'selected':'')+'>2 sacolas</option><option value="3" '+(o.numSacolas==='3'?'selected':'')+'>3 sacolas</option><option value="4+" '+(o.numSacolas==='4+'?'selected':'')+'>4+ sacolas</option></select></div>';
     html+='</div>';
   } else if(o.deliveryMethod==='entrega_propria'){
     html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">';
@@ -2414,28 +2418,23 @@ function getOrderById(id){return state.orders.find(o=>o.id===id)||orderModalData
 
 function copiarMotoboy(id){
   const o=getOrderById(id);if(!o)return;
-  const prod=state.prods.find(p=>p.id===o.productId);
-  const items=(o.items||[{productId:o.productId,quantity:o.quantity,salePrice:o.salePrice}]).map(it=>{
-    const p=state.prods.find(x=>x.id===it.productId);
-    return `  • ${p?p.name:'Produto'} x${it.quantity||1} — ${fmtBRL(it.salePrice||o.salePrice||0)}`;
-  }).join('\n');
-  const pagStatus=o.statusPagamento==='pago'?'✅ JÁ PAGO':o.statusPagamento==='entrega'?'💵 COBRAR NA ENTREGA':'⏳ PENDENTE';
+  const pay=(o.payments&&o.payments[0])||{type:'pix'};
+  const payLabel=pay.type==='pix'?'PIX ⚡':pay.type==='dinheiro'?'Dinheiro 💵':`Cartão 💳${pay.installments>1?' ('+pay.installments+'x)':''}`;
+  const pagStatus=o.statusPagamento==='pago'?'✅ JÁ PAGO':o.statusPagamento==='entrega'?'💵 COBRAR NA ENTREGA — '+fmtBRL(o.salePrice||0):'⏳ PENDENTE';
+  const addr=o.diffDeliveryAddr&&o.deliveryStreet
+    ?(o.deliveryStreet||'')+(o.deliveryStreetNum?', '+o.deliveryStreetNum:'')+(o.deliveryComplement?' — '+o.deliveryComplement:'')+'\n    '+(o.deliveryBairro||'')+' · '+(o.deliveryCity||'')+'/'+(o.deliveryState||'')+'\n    CEP: '+(o.deliveryCep||'—')
+    :(o.street||'')+(o.streetNum?', '+o.streetNum:'')+(o.complement?' — '+o.complement:'')+'\n    '+(o.bairro||'')+' · '+(o.city||'')+'/'+(o.state||'')+'\n    CEP: '+(o.cep||'—');
+
   const txt=`🛵 ENTREGA — ZAMBONINI IMPORTS
 ━━━━━━━━━━━━━━━━━━━━
 👤 ${o.clientName||'—'}
 📞 ${o.phone||'—'}
 ━━━━━━━━━━━━━━━━━━━━
-📍 ${o.street||'—'}${o.streetNum?', '+o.streetNum:''}${o.complement?' — '+o.complement:''}
-    ${o.bairro||''} · ${o.city||''}/${o.state||''}
-    CEP: ${o.cep||'—'}
+📍 ${addr}
 ━━━━━━━━━━━━━━━━━━━━
-📦 PRODUTO(S):
-${items}
-━━━━━━━━━━━━━━━━━━━━
-💰 TOTAL: ${fmtBRL(o.salePrice||0)}
-💳 PAGAMENTO: ${pagStatus}
-━━━━━━━━━━━━━━━━━━━━
-📋 Pedido #${o.orderNum||o.id||'—'}`;
+💰 ${fmtBRL(o.salePrice||0)} — ${payLabel}
+${pagStatus}${o.deliveryUntil?'\n🕐 Entregar até: '+o.deliveryUntil:''}${o.numSacolas?'\n🛍 '+o.numSacolas+' sacola'+(o.numSacolas==='1'?'':'s'):''}`;
+
   navigator.clipboard.writeText(txt).then(()=>showToast('✅ Copiado para o motoboy!','gr')).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();showToast('✅ Copiado!','gr');});
 }
 
