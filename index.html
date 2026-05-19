@@ -2605,32 +2605,49 @@ async function loadMunicipios(){
   return window._municipios;
 }
 
+function getCityDrop(){
+  let d=document.getElementById('_city-ac-drop');
+  if(!d){
+    d=document.createElement('div');
+    d.id='_city-ac-drop';
+    d.style.cssText='display:none;position:fixed;background:#1c1c1c;border:1px solid rgba(249,115,22,.5);border-radius:0 0 10px 10px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.8)';
+    document.body.appendChild(d);
+  }
+  return d;
+}
+function closeCityDrop(){getCityDrop().style.display='none';}
+
 function setupCityAutocomplete(inputId,cityField,stateField){
   const input=document.getElementById(inputId);
-  if(!input||input._acSetup)return;
-  input._acSetup=true;
-
-  // Dropdown container
-  const wrap=input.parentElement;
-  wrap.style.position='relative';
-  const drop=document.createElement('div');
-  drop.style.cssText='display:none;position:absolute;top:100%;left:0;right:0;background:#1c1c1c;border:1px solid rgba(249,115,22,.4);border-top:none;border-radius:0 0 8px 8px;z-index:999;max-height:200px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)';
-  wrap.appendChild(drop);
+  if(!input||input._acCity)return;
+  input._acCity=true;
+  const stateInputId=stateField==='state'?'order-state':'order-del-state';
 
   let debounce;
   input.addEventListener('input',async function(){
     clearTimeout(debounce);
     const q=this.value.trim();
-    if(q.length<2){drop.style.display='none';setOrderField(cityField,q);return;}
     setOrderField(cityField,q);
+    if(q.length<2){closeCityDrop();return;}
     debounce=setTimeout(async()=>{
       const muns=await loadMunicipios();
-      const matches=muns.filter(m=>m.nome.toLowerCase().startsWith(q.toLowerCase())).slice(0,8);
+      const matches=muns.filter(m=>m.nome.toLowerCase().includes(q.toLowerCase())).slice(0,12);
+      const drop=getCityDrop();
       if(!matches.length){drop.style.display='none';return;}
-      drop.innerHTML=matches.map(m=>`<div data-nome="${m.nome}" data-uf="${m.uf}" style="padding:8px 12px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.05)" onmouseover="this.style.background='rgba(249,115,22,.15)'" onmouseout="this.style.background='transparent'">
-        <span style="color:#f0f0f0">${m.nome}</span>
-        <span style="color:#f97316;font-weight:700;font-size:11px">${m.uf}</span>
+
+      const rect=input.getBoundingClientRect();
+      drop.style.top=(rect.bottom)+'px';
+      drop.style.left=rect.left+'px';
+      drop.style.width=Math.max(rect.width,240)+'px';
+
+      drop.innerHTML=matches.map(m=>`<div data-nome="${esc(m.nome)}" data-uf="${m.uf}"
+        style="padding:10px 14px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.06)"
+        onmouseover="this.style.background='rgba(249,115,22,.18)'"
+        onmouseout="this.style.background='transparent'">
+        <span style="color:#f0f0f0;font-weight:500">${esc(m.nome)}</span>
+        <span style="color:#f97316;font-weight:700;font-size:12px;margin-left:10px;background:rgba(249,115,22,.12);padding:2px 8px;border-radius:4px">${m.uf}</span>
       </div>`).join('');
+
       drop.style.display='block';
       drop.querySelectorAll('[data-nome]').forEach(item=>{
         item.addEventListener('mousedown',function(e){
@@ -2639,25 +2656,24 @@ function setupCityAutocomplete(inputId,cityField,stateField){
           input.value=nome;
           setOrderField(cityField,nome);
           setOrderField(stateField,uf);
-          drop.style.display='none';
-          // Atualiza o campo UF na tela
-          const ufInput=document.getElementById(inputId.replace('city','state').replace('City','State'));
-          if(ufInput)ufInput.value=uf;
+          const ufEl=document.getElementById(stateInputId);
+          if(ufEl)ufEl.value=uf;
+          closeCityDrop();
         });
       });
-    },200);
+    },180);
   });
 
-  input.addEventListener('blur',()=>setTimeout(()=>{drop.style.display='none';},200));
+  input.addEventListener('blur',()=>setTimeout(closeCityDrop,220));
+  input.addEventListener('keydown',e=>{if(e.key==='Escape')closeCityDrop();});
   input.addEventListener('focus',()=>{if(input.value.length>=2)input.dispatchEvent(new Event('input'));});
 }
 
-// Inicializa autocompletes após render do modal de pedido
 function initCityAutocompletes(){
   setTimeout(()=>{
     setupCityAutocomplete('order-city','city','state');
     setupCityAutocomplete('order-del-city','deliveryCity','deliveryState');
-  },100);
+  },80);
 }
 
 // ============ DRE ============
