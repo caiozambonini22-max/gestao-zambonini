@@ -830,7 +830,7 @@ function renderOrderModal(){
             <div class="field"><label>Rua / Endereço de Cobrança</label><input value="${esc(o.street||'')}" oninput="setOrderField('street',this.value)"></div>
             <div class="field"><label>Número</label><input value="${esc(o.streetNum||'')}" oninput="setOrderField('streetNum',this.value)"></div>
             <div class="field"><label>Complemento</label><input value="${esc(o.complement||'')}" oninput="setOrderField('complement',this.value)"></div>
-            <div class="field"><label>Cidade</label><input id="order-city" value="${esc(o.city)}" oninput="setOrderField('city',this.value)"></div>
+            <div class="field"><label>Cidade</label><input id="order-city" value="${esc(o.city)}" oninput="setOrderField('city',this.value);onCityInput('order-state',this.value)" autocomplete="off"></div>
             <div class="field"><label>UF</label><input id="order-state" value="${esc(o.state)}" oninput="setOrderField('state',this.value)" maxlength="2" style="text-transform:uppercase"></div>
             <div class="field"><label>CEP</label>
               <div style="display:flex;gap:5px;align-items:center">
@@ -850,7 +850,7 @@ function renderOrderModal(){
               <div class="field"><label>Rua</label><input value="${esc(o.deliveryStreet||'')}" oninput="setOrderField('deliveryStreet',this.value)"></div>
               <div class="field"><label>Número</label><input value="${esc(o.deliveryStreetNum||'')}" oninput="setOrderField('deliveryStreetNum',this.value)"></div>
               <div class="field"><label>Complemento</label><input value="${esc(o.deliveryComplement||'')}" oninput="setOrderField('deliveryComplement',this.value)"></div>
-              <div class="field"><label>Cidade</label><input id="order-del-city" value="${esc(o.deliveryCity||'')}" oninput="setOrderField('deliveryCity',this.value)"></div>
+              <div class="field"><label>Cidade</label><input id="order-del-city" value="${esc(o.deliveryCity||'')}" oninput="setOrderField('deliveryCity',this.value);onCityInput('order-del-state',this.value)" autocomplete="off"></div>
               <div class="field"><label>UF</label><input value="${esc(o.deliveryState||'')}" oninput="setOrderField('deliveryState',this.value.toUpperCase().slice(0,2))" maxlength="2"></div>
               <div class="field"><label>CEP</label>
                 <div style="display:flex;gap:5px;align-items:center">
@@ -2595,86 +2595,65 @@ function selectSS(id,val,lbl){
 
 // ============ AUTOCOMPLETE CIDADE ============
 window._municipios=null;
+window._cityDbnc=null;
+
 async function loadMunicipios(){
   if(window._municipios)return window._municipios;
   try{
     const r=await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome');
     const data=await r.json();
     window._municipios=data.map(m=>({nome:m.nome,uf:m.microrregiao.mesorregiao.UF.sigla}));
-  }catch{window._municipios=[];}
+  }catch(e){window._municipios=[];}
   return window._municipios;
 }
 
 function getCityDrop(){
-  let d=document.getElementById('_city-ac-drop');
+  let d=document.getElementById('_cdrop');
   if(!d){
     d=document.createElement('div');
-    d.id='_city-ac-drop';
-    d.style.cssText='display:none;position:fixed;background:#1c1c1c;border:1px solid rgba(249,115,22,.5);border-radius:0 0 10px 10px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.8)';
+    d.id='_cdrop';
+    d.style.cssText='display:none;position:fixed;background:#1a1a1a;border:1px solid #f97316;border-radius:8px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.9)';
     document.body.appendChild(d);
+    document.addEventListener('mousedown',e=>{if(!d.contains(e.target)&&e.target.id!=='order-city'&&e.target.id!=='order-del-city')d.style.display='none';});
   }
   return d;
 }
-function closeCityDrop(){getCityDrop().style.display='none';}
 
-function setupCityAutocomplete(inputId,cityField,stateField){
-  const input=document.getElementById(inputId);
-  if(!input||input._acCity)return;
-  input._acCity=true;
-  const stateInputId=stateField==='state'?'order-state':'order-del-state';
-
-  let debounce;
-  input.addEventListener('input',async function(){
-    clearTimeout(debounce);
-    const q=this.value.trim();
-    setOrderField(cityField,q);
-    if(q.length<2){closeCityDrop();return;}
-    debounce=setTimeout(async()=>{
-      const muns=await loadMunicipios();
-      const matches=muns.filter(m=>m.nome.toLowerCase().includes(q.toLowerCase())).slice(0,12);
-      const drop=getCityDrop();
-      if(!matches.length){drop.style.display='none';return;}
-
-      const rect=input.getBoundingClientRect();
-      drop.style.top=(rect.bottom)+'px';
-      drop.style.left=rect.left+'px';
-      drop.style.width=Math.max(rect.width,240)+'px';
-
-      drop.innerHTML=matches.map(m=>`<div data-nome="${esc(m.nome)}" data-uf="${m.uf}"
-        style="padding:10px 14px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.06)"
-        onmouseover="this.style.background='rgba(249,115,22,.18)'"
-        onmouseout="this.style.background='transparent'">
-        <span style="color:#f0f0f0;font-weight:500">${esc(m.nome)}</span>
-        <span style="color:#f97316;font-weight:700;font-size:12px;margin-left:10px;background:rgba(249,115,22,.12);padding:2px 8px;border-radius:4px">${m.uf}</span>
-      </div>`).join('');
-
-      drop.style.display='block';
-      drop.querySelectorAll('[data-nome]').forEach(item=>{
-        item.addEventListener('mousedown',function(e){
-          e.preventDefault();
-          const nome=this.dataset.nome;const uf=this.dataset.uf;
-          input.value=nome;
-          setOrderField(cityField,nome);
-          setOrderField(stateField,uf);
-          const ufEl=document.getElementById(stateInputId);
-          if(ufEl)ufEl.value=uf;
-          closeCityDrop();
-        });
-      });
-    },180);
-  });
-
-  input.addEventListener('blur',()=>setTimeout(closeCityDrop,220));
-  input.addEventListener('keydown',e=>{if(e.key==='Escape')closeCityDrop();});
-  input.addEventListener('focus',()=>{if(input.value.length>=2)input.dispatchEvent(new Event('input'));});
+async function onCityInput(stateId, q){
+  clearTimeout(window._cityDbnc);
+  const drop=getCityDrop();
+  if(!q||q.length<2){drop.style.display='none';return;}
+  window._cityDbnc=setTimeout(async()=>{
+    const el=document.getElementById(stateId==='order-state'?'order-city':'order-del-city');
+    if(!el)return;
+    const rect=el.getBoundingClientRect();
+    const muns=await loadMunicipios();
+    const q2=q.toLowerCase();
+    const matches=muns.filter(m=>m.nome.toLowerCase().includes(q2)).slice(0,12);
+    if(!matches.length){drop.style.display='none';return;}
+    drop.style.cssText=`display:block;position:fixed;top:${rect.bottom+2}px;left:${rect.left}px;width:${Math.max(rect.width,200)}px;background:#1a1a1a;border:1px solid #f97316;border-radius:8px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.9)`;
+    drop.innerHTML=matches.map(m=>`<div onclick="pickCity('${stateId}','${m.nome.replace(/'/g,'&#39;')}','${m.uf}')"
+      style="padding:10px 14px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.06)"
+      onmouseover="this.style.background='rgba(249,115,22,.2)'" onmouseout="this.style.background='transparent'">
+      <span style="color:#f0f0f0">${m.nome}</span>
+      <span style="color:#f97316;font-weight:700;font-size:11px;background:rgba(249,115,22,.15);padding:2px 7px;border-radius:4px">${m.uf}</span>
+    </div>`).join('');
+  },180);
 }
 
-function initCityAutocompletes(){
-  setTimeout(()=>{
-    setupCityAutocomplete('order-city','city','state');
-    setupCityAutocomplete('order-del-city','deliveryCity','deliveryState');
-  },80);
+function pickCity(stateId, nome, uf){
+  const isDelivery=stateId==='order-del-state';
+  const inputId=isDelivery?'order-del-city':'order-city';
+  const el=document.getElementById(inputId);
+  if(el)el.value=nome;
+  const ufEl=document.getElementById(stateId);
+  if(ufEl)ufEl.value=uf;
+  if(isDelivery){setOrderField('deliveryCity',nome);setOrderField('deliveryState',uf);}
+  else{setOrderField('city',nome);setOrderField('state',uf);}
+  getCityDrop().style.display='none';
 }
+
+function initCityAutocompletes(){loadMunicipios();}
 
 // ============ DRE ============
 let dreMes=new Date().getMonth(), dreAno=new Date().getFullYear();
