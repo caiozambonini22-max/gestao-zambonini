@@ -532,7 +532,9 @@ function renderDashboard(){
     const rev=co.reduce((a,o)=>a+calcM(o).rev,0);
     return {...c,count:co.length,rev};
   }).filter(c=>c.count>0).sort((a,b)=>b.rev-a.rev);
-  const ads=state.config.adsData&&Number(state.config.adsData.month||0)>0?Number(state.config.adsData.month):Number(state.config.gastoAnuncios||0);
+  const todayStr0=new Date().toISOString().slice(0,10);
+  const adPeriodSpend=state.config.adsData?(dashPeriod==='day'&&dashDay===todayStr0?Number(state.config.adsData.today||0):Number(state.config.adsData.month||0)):0;
+  const ads=adPeriodSpend>0?adPeriodSpend:Number(state.config.gastoAnuncios||0);
   const roas=ads>0?(totalRev/ads).toFixed(1):0;
   const igF=Number(state.config.igFollowers||0);
   const igF7=Number(state.config.igF7||0);
@@ -604,9 +606,17 @@ function renderDashboard(){
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="ct">Gastos com Anúncios</div><div class="ads-pill"><div class="ads-dot"></div>Meta Ads</div></div>
         ${state.config.metaToken&&state.config.adsData?`
-          <div style="font-size:26px;font-weight:800;color:var(--or);margin:6px 0">${fmtBRL(Number(state.config.adsData.month||0))}</div>
-          <div style="font-size:10px;color:var(--txd);margin-bottom:4px">Este mês · Hoje: ${fmtBRL(Number(state.config.adsData.today||0))}</div>
-          <div style="font-size:10px;color:var(--gr);margin-bottom:8px">✅ Automático via Meta Ads API</div>
+          ${(()=>{
+            const ad=state.config.adsData;
+            const todayStr2=new Date().toISOString().slice(0,10);
+            // Usa o gasto do período selecionado no dashboard
+            let spendLabel,spendVal;
+            if(dashPeriod==='day'&&dashDay===todayStr2){spendLabel='Hoje';spendVal=Number(ad.today||0);}
+            else if(dashPeriod==='month'){spendLabel='Este mês';spendVal=Number(ad.month||0);}
+            else{spendLabel=periodLabel;spendVal=Number(ad.month||0);}
+            return `<div style="font-size:26px;font-weight:800;color:var(--or);margin:6px 0">${fmtBRL(spendVal)}</div>
+            <div style="font-size:10px;color:var(--gr);margin-bottom:8px">✅ ${spendLabel} — Automático via Meta Ads</div>`;
+          })()}
         `:`
           <div class="ip" style="margin-bottom:6px"><span class="ips">R$</span><input type="number" value="${state.config.gastoAnuncios||''}" oninput="updateConfig('gastoAnuncios',this.value)" placeholder="0,00" style="font-size:16px;font-weight:700"></div>
           <div style="font-size:10px;color:var(--txd);margin-bottom:6px">Manual — conecte o Meta Ads em Métricas para automático</div>
