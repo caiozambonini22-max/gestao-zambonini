@@ -695,7 +695,7 @@ function renderItemsList(o){
     const valorLbl=item.isGift?'Valor (0=gratis)':'Valor';
 
     html+='<div data-item-idx="'+idx+'" style="display:grid;grid-template-columns:'+cols+';gap:7px;align-items:end;padding:10px;background:'+bg+';border-radius:8px;border:1px solid '+border+';margin-bottom:7px">';
-    const ssOpts=[{v:'',l:'-- Selecione --'},...state.prods.map(p=>({v:p.id,l:p.name}))];
+    const ssOpts=[{v:'',l:''},...state.prods.map(p=>({v:p.id,l:p.name}))];
     const onProdSelect=`setItemField(${idx},'productId',__VAL__);setItemField(${idx},'variacaoId','');const _sp=state.prods.find(p=>p.id===__VAL__);if(_sp)setItemField(${idx},'salePrice',_sp.salePrice);updateOrderSummary();document.getElementById('order-items-list').innerHTML=renderItemsList(orderModalData);`;
 
     html+='<div class="field"><label>'+lbl+'</label>'+makeSearchSelect('item-prod-'+idx,item.productId,ssOpts,onProdSelect)+'</div>';
@@ -744,7 +744,7 @@ function renderOrderModal(){
   let dlvOptions='';DLV.forEach(d=>{dlvOptions+=`<option value="${d.id}" ${o.deliveryMethod===d.id?'selected':''}>${d.icon} ${d.label}</option>`;});
   let upsellRows='';
   (o.upsells||[]).forEach(u=>{const up=state.prods.find(p=>p.id===u.productId);const nm=u.productId==='_c'?(u.customName||'Extra'):(up?up.name:'Extra');upsellRows+=`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;background:var(--sf2);border-radius:5px;margin-top:4px"><span>${esc(nm)}</span><span style="color:var(--gr)">${fmtBRL(u.price)}</span></div>`;});
-  const usSSOpts=[{v:'',l:'Produto...'},{v:'_c',l:'✏️ Digitar produto...'},...state.prods.map(p=>({v:p.id,l:p.name}))];
+  const usSSOpts=[{v:'',l:''},{v:'_c',l:'✏️ Digitar produto...'},...state.prods.map(p=>({v:p.id,l:p.name}))];
   const usOnSelect=`ufProdChange(__VAL__);`;
   let paysHTML='';
   (o.payments||[]).forEach((pay,idx)=>{
@@ -764,7 +764,7 @@ function renderOrderModal(){
   let actsHTML='';
   acts.forEach(a=>{const chk=(o.postActions||{})[a.k];actsHTML+=`<div class="ck-r ${chk?'on':''}" data-act="${a.k}" onclick="toggleAct('${a.k}')"><div class="ck-b ${chk?'on':''}">${chk?'v':''}</div><span class="ck-lbl" style="font-size:12px;color:${chk?'var(--or)':'var(--txm)'}">${a.i} ${a.l}</span></div>`;});
 
-  return `<div style="max-width:900px;margin:0 auto">
+  return `<div style="max-width:1400px;margin:0 auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
       <div>
         <div style="font-size:22px;font-weight:800;color:var(--or)">${isNew?'NOVO PEDIDO':'EDITAR PEDIDO #'+o.orderNum}</div>
@@ -783,7 +783,7 @@ function renderOrderModal(){
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 280px;gap:16px">
+    <div style="display:grid;grid-template-columns:1fr 320px;gap:16px">
       <div>
         <!-- CLIENTE -->
         <div class="card" style="margin-bottom:12px">
@@ -814,7 +814,7 @@ function renderOrderModal(){
             </select></div>
             <div class="field"><label>Inscrição Estadual</label><input value="${esc(o.inscEstadual||'')}" oninput="setOrderField('inscEstadual',this.value)" placeholder="Opcional"></div>
           </div>`:''}
-          <div style="display:grid;grid-template-columns:2fr 80px 1fr 1fr 60px 100px;gap:8px">
+          <div style="display:grid;grid-template-columns:3fr 90px 1fr 1.5fr 55px 140px;gap:8px">
             <div class="field"><label>Rua / Endereço de Cobrança</label><input value="${esc(o.street||'')}" oninput="setOrderField('street',this.value)"></div>
             <div class="field"><label>Número</label><input value="${esc(o.streetNum||'')}" oninput="setOrderField('streetNum',this.value)"></div>
             <div class="field"><label>Complemento</label><input value="${esc(o.complement||'')}" oninput="setOrderField('complement',this.value)"></div>
@@ -834,7 +834,7 @@ function renderOrderModal(){
           </div>
           ${o.diffDeliveryAddr?`<div style="margin-top:10px;padding:12px;background:var(--sf3);border-radius:8px;border:1px solid var(--bd)">
             <div class="sl" style="margin-bottom:8px">Endereço de Entrega</div>
-            <div style="display:grid;grid-template-columns:2fr 80px 1fr 1fr 60px 100px;gap:8px">
+            <div style="display:grid;grid-template-columns:3fr 90px 1fr 1.5fr 55px 140px;gap:8px">
               <div class="field"><label>Rua</label><input value="${esc(o.deliveryStreet||'')}" oninput="setOrderField('deliveryStreet',this.value)"></div>
               <div class="field"><label>Número</label><input value="${esc(o.deliveryStreetNum||'')}" oninput="setOrderField('deliveryStreetNum',this.value)"></div>
               <div class="field"><label>Complemento</label><input value="${esc(o.deliveryComplement||'')}" oninput="setOrderField('deliveryComplement',this.value)"></div>
@@ -2548,7 +2548,7 @@ function gerarComprovanteImagem(id){
 window._ssData={};
 function makeSearchSelect(id,selectedId,options,onSelectCode){
   window._ssData[id]={options,onSelectCode};
-  const sel=options.find(o=>o.v===selectedId);
+  const sel=options.find(o=>o.v===selectedId&&o.v!=='');
   const lbl=sel?sel.l:'';
   return `<div style="position:relative">
     <input id="ss-${id}" value="${esc(lbl)}" placeholder="Buscar produto..." autocomplete="off"
