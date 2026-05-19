@@ -2921,33 +2921,100 @@ function renderMetricas(){
     </div>
     ${state.config.metaToken&&state.config.metaAdAccount?`
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px">
-      <div class="card" style="border-color:rgba(249,115,22,.3)"><div class="ct">💸 Gasto Hoje</div><div class="cv cv-or" style="font-size:20px">${fmtBRL(gastoHoje)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${(state.config.adsData&&state.config.adsData.todayImpressions)||0} impressões hoje</div></div>
+      <div class="card" style="border-color:rgba(249,115,22,.3)"><div class="ct">💸 Gasto Hoje</div><div class="cv cv-or" style="font-size:20px">${fmtBRL(gastoHoje)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${(state.config.adsData&&state.config.adsData.todayImpressions)||0} impressões</div></div>
       <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">📅 Gasto no Mês</div><div class="cv cv-rd" style="font-size:20px">${fmtBRL(gastoMes)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${impressoes.toLocaleString('pt-BR')} impressões</div></div>
-      <div class="card" style="border-color:${Number(roasMes)>=2?'rgba(34,197,94,.3)':'rgba(239,68,68,.2)'}"><div class="ct">📈 ROAS Mês</div><div class="cv ${Number(roasMes)>=2?'cv-gr':Number(roasMes)>=1?'cv-or':'cv-rd'}" style="font-size:20px">${gastoMes>0?roasMes+'x':'—'}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">Receita / Gasto</div></div>
-      <div class="card"><div class="ct">🖱 CTR / CPC</div><div class="cv cv-bl" style="font-size:20px">${ctr}%</div><div style="font-size:10px;color:var(--txd);margin-top:2px">CPC: R$ ${cpc}</div></div>
-      <div class="card"><div class="ct">🎯 CPL / CAC</div><div class="cv" style="font-size:20px;color:var(--or)">R$ ${cpl}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">Custo por lead</div></div>
+      <div class="card"><div class="ct">💬 Leads Hoje / Mês</div><div class="cv cv-bl" style="font-size:20px">${(state.config.adsData&&state.config.adsData.leadsHoje)||0} <span style="font-size:13px;color:var(--txd)">/ ${(state.config.adsData&&state.config.adsData.leadsMes)||0}</span></div><div style="font-size:10px;color:var(--txd);margin-top:2px">CPL mês: ${(state.config.adsData&&state.config.adsData.cplMes)>0?fmtBRL(state.config.adsData.cplMes):'—'}</div></div>
+      <div class="card"><div class="ct">🛒 Vendas Meta / Valor</div><div class="cv cv-gr" style="font-size:20px">${(state.config.adsData&&state.config.adsData.vendasMes)||0}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${(state.config.adsData&&state.config.adsData.valorVendasMes)>0?fmtBRL(state.config.adsData.valorVendasMes):'via CAPI/Tintim'}</div></div>
+      <div class="card" style="border-color:${Number(roasMes)>=2?'rgba(34,197,94,.3)':'rgba(239,68,68,.2)'}"><div class="ct">📈 ROAS Mês</div><div class="cv ${Number(roasMes)>=2?'cv-gr':Number(roasMes)>=1?'cv-or':'cv-rd'}" style="font-size:20px">${gastoMes>0?roasMes+'x':'—'}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">CTR ${ctr}% · CPC R$${cpc}</div></div>
     </div>
     ${(()=>{
       const camps=(state.config.adsData&&state.config.adsData.campaigns)||[];
-      if(!camps.length) return '<div style="padding:10px;font-size:11px;color:var(--txd);text-align:center">Clique em 🔄 Sincronizar para carregar campanhas</div>';
+      const adsets=(state.config.adsData&&state.config.adsData.adsets)||[];
+      const ads=(state.config.adsData&&state.config.adsData.ads)||[];
+      if(!window._adsEx)window._adsEx=new Set();
+      if(!camps.length)return '<div style="padding:14px;font-size:11px;color:var(--txd);text-align:center">Clique em 🔄 Sincronizar para carregar campanhas</div>';
+
+      const hdr=(cols)=>`<tr style="background:var(--sf2)">${cols.map(c=>`<th style="text-align:${c.r?'right':'left'};padding:6px ${c.r?'14':'10'}px;font-size:9px;color:var(--txd);font-weight:700;text-transform:uppercase;white-space:nowrap">${c.l}</th>`).join('')}</tr>`;
+      const cols=[{l:'Nome'},{l:'Status'},{l:'Gasto',r:1},{l:'Impr.',r:1},{l:'Cliques',r:1},{l:'CTR',r:1},{l:'CPM',r:1},{l:'Freq.',r:1},{l:'Leads',r:1},{l:'CPL',r:1},{l:'Vendas',r:1}];
+
+      const cplColor=(v)=>v>0?(v<15?'var(--gr)':v<30?'#f59e0b':'var(--rd)'):'var(--txd)';
+      const statusBadge=(s)=>`<span style="font-size:10px;padding:2px 6px;border-radius:10px;font-weight:700;background:${s==='ACTIVE'?'rgba(34,197,94,.15)':'rgba(100,100,100,.12)'};color:${s==='ACTIVE'?'var(--gr)':'var(--txd)'}">${s==='ACTIVE'?'Ativa':'Pausada'}</span>`;
+
+      let rows='';
+      camps.forEach(c=>{
+        const cEx=window._adsEx.has('c_'+c.id);
+        const cAdsets=adsets.filter(s=>s.campaignId===c.id);
+        rows+=`<tr style="cursor:pointer;border-bottom:1px solid var(--bd)" onclick="window._adsEx.has('c_${c.id}')?window._adsEx.delete('c_${c.id}'):window._adsEx.add('c_${c.id}');render()">
+          <td style="padding:9px 10px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px">
+            <span style="color:var(--or);font-size:11px;display:inline-block;transform:rotate(${cEx?'90':'0'}deg);transition:.2s">${cAdsets.length?'▶':''}</span>
+            📊 ${esc(c.name)}
+          </td>
+          <td style="padding:9px 8px">${statusBadge(c.status)}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--or);font-weight:700">${c.spend>0?fmtBRL(c.spend):'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.impressions>0?c.impressions.toLocaleString('pt-BR'):'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.clicks>0?c.clicks:'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.ctr>0?c.ctr.toFixed(2)+'%':'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.cpm>0?fmtBRL(c.cpm):'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.freq>0?c.freq.toFixed(1):'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--bl);font-weight:700">${c.leads>0?c.leads:'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:${cplColor(c.cpl)};font-weight:700">${c.cpl>0?fmtBRL(c.cpl):'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:var(--gr);font-weight:700">${c.vendas>0?c.vendas:'—'}</td>
+        </tr>`;
+
+        if(cEx){
+          cAdsets.forEach(s=>{
+            const sEx=window._adsEx.has('s_'+s.id);
+            const sAds=ads.filter(a=>a.adsetId===s.id);
+            rows+=`<tr style="cursor:pointer;border-bottom:1px solid var(--bd);background:rgba(249,115,22,.04)" onclick="event.stopPropagation();window._adsEx.has('s_${s.id}')?window._adsEx.delete('s_${s.id}'):window._adsEx.add('s_${s.id}');render()">
+              <td style="padding:8px 10px 8px 28px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:6px">
+                <span style="color:var(--txd);font-size:10px;display:inline-block;transform:rotate(${sEx?'90':'0'}deg);transition:.2s">${sAds.length?'▶':''}</span>
+                📁 ${esc(s.name)}
+              </td>
+              <td style="padding:8px">${statusBadge(s.status)}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--or)">${s.spend>0?fmtBRL(s.spend):'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--txm);font-size:11px">${s.impressions>0?s.impressions.toLocaleString('pt-BR'):'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--txm);font-size:11px">${s.clicks>0?s.clicks:'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--txm);font-size:11px">${s.ctr>0?s.ctr.toFixed(2)+'%':'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--txm);font-size:11px">${s.cpm>0?fmtBRL(s.cpm):'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--txm);font-size:11px">${s.freq>0?s.freq.toFixed(1):'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--bl);font-size:11px">${s.leads>0?s.leads:'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:${cplColor(s.cpl)};font-size:11px">${s.cpl>0?fmtBRL(s.cpl):'—'}</td>
+              <td style="padding:8px 14px;text-align:right;color:var(--gr);font-size:11px">${s.vendas>0?s.vendas:'—'}</td>
+            </tr>`;
+
+            if(sEx){
+              sAds.forEach(a=>{
+                rows+=`<tr style="border-bottom:1px solid var(--bd);background:rgba(59,130,246,.04)" onclick="event.stopPropagation()">
+                  <td style="padding:7px 10px 7px 48px;font-size:11px;display:flex;align-items:center;gap:8px">
+                    ${a.thumb?`<img src="${a.thumb}" style="width:32px;height:32px;border-radius:4px;object-fit:cover;flex-shrink:0">`:' 🖼️'}
+                    <span style="color:var(--txm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(a.name)}</span>
+                  </td>
+                  <td style="padding:7px 8px">${statusBadge(a.status)}</td>
+                  <td style="padding:7px 14px;text-align:right;color:var(--or);font-size:11px">${a.spend>0?fmtBRL(a.spend):'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;color:var(--txd);font-size:11px">${a.impressions>0?a.impressions.toLocaleString('pt-BR'):'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;color:var(--txd);font-size:11px">${a.clicks>0?a.clicks:'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;font-size:11px;color:${a.ctr>2?'var(--gr)':a.ctr>1?'#f59e0b':'var(--rd)'}">${a.ctr>0?a.ctr.toFixed(2)+'%':'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;font-size:11px;color:${a.cpm<20?'var(--gr)':a.cpm<40?'#f59e0b':'var(--rd)'}">${a.cpm>0?fmtBRL(a.cpm):'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;font-size:11px;color:${a.freq<2?'var(--gr)':a.freq<4?'#f59e0b':'var(--rd)'}">${a.freq>0?a.freq.toFixed(1):'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;color:var(--bl);font-size:11px">${a.leads>0?a.leads:'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;font-size:11px;color:${cplColor(a.cpl)}">${a.cpl>0?fmtBRL(a.cpl):'—'}</td>
+                  <td style="padding:7px 14px;text-align:right;color:var(--gr);font-size:11px">${a.vendas>0?a.vendas:'—'}</td>
+                </tr>`;
+              });
+            }
+          });
+        }
+      });
+
       return `<div class="card" style="padding:0;overflow:hidden;margin-bottom:12px">
-        <div style="padding:10px 14px;border-bottom:1px solid var(--bd);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600">📊 Campanhas Ativas Hoje</div>
-        <table style="width:100%">
-          <thead><tr style="background:var(--sf3)">
-            <th style="text-align:left;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Campanha</th>
-            <th style="text-align:left;padding:8px 10px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Status</th>
-            <th style="text-align:right;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Gasto Hoje</th>
-            <th style="text-align:right;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Impressões</th>
-            <th style="text-align:right;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Cliques</th>
-          </tr></thead>
-          <tbody>${camps.map((c,i)=>`<tr style="border-bottom:1px solid var(--bd);background:${i%2?'var(--sf3)40':'transparent'}">
-            <td style="padding:9px 14px;font-size:12px;font-weight:500;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name)}</td>
-            <td style="padding:9px 10px"><span style="font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;background:${c.status==='ACTIVE'?'rgba(34,197,94,.15)':'rgba(100,100,100,.15)'};color:${c.status==='ACTIVE'?'var(--gr)':'var(--txd)'}">${c.status==='ACTIVE'?'Ativa':'Pausada'}</span></td>
-            <td style="padding:9px 14px;text-align:right;color:var(--or);font-weight:700">${c.spend>0?fmtBRL(c.spend):'—'}</td>
-            <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.impressions>0?c.impressions.toLocaleString('pt-BR'):'—'}</td>
-            <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.clicks>0?c.clicks:'—'}</td>
-          </tr>`).join('')}</tbody>
-        </table>
+        <div style="padding:10px 14px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600">📊 Campanhas → 📁 Conjuntos → 🖼️ Criativos</span>
+          <span style="font-size:10px;color:var(--txd)">Clique nas campanhas para expandir</span>
+        </div>
+        <div style="overflow-x:auto"><table style="width:100%;min-width:900px">
+          <thead>${hdr(cols)}</thead>
+          <tbody>${rows}</tbody>
+        </table></div>
       </div>`;
     })()}
     `:`
@@ -3015,30 +3082,64 @@ async function syncMetaAds(){
   try{
     const today=new Date().toISOString().slice(0,10);
     const firstDay=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-    const fields='spend,impressions,clicks,reach,cpm,cpc';
+    const fields='spend,impressions,clicks,reach,cpm,cpc,actions,action_values,cost_per_action_type';
 
     // Gasto hoje, mês e por campanha
     const urlHoje=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range={"since":"${today}","until":"${today}"}&access_token=${token}`;
     const urlMes=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range={"since":"${firstDay}","until":"${today}"}&access_token=${token}`;
-    const urlCamp=`https://graph.facebook.com/v19.0/${account}/campaigns?fields=name,status,insights.date_preset(today){spend,impressions,clicks}&limit=20&access_token=${token}`;
+    const urlCamp=`https://graph.facebook.com/v19.0/${account}/campaigns?fields=name,status,insights.date_preset(today){spend,impressions,clicks,reach,actions,action_values,cost_per_action_type,cpm,ctr,frequency}&limit=30&access_token=${token}`;
+    const urlAdsets=`https://graph.facebook.com/v19.0/${account}/adsets?fields=name,status,campaign_id,insights.date_preset(today){spend,impressions,clicks,reach,actions,cost_per_action_type,cpm,ctr,frequency}&limit=50&access_token=${token}`;
+    const urlAds=`https://graph.facebook.com/v19.0/${account}/ads?fields=name,status,adset_id,campaign_id,creative{name,thumbnail_url},insights.date_preset(today){spend,impressions,clicks,reach,actions,cost_per_action_type,cpm,ctr,frequency}&limit=100&access_token=${token}`;
 
-    const [rHoje,rMes,rCamp]=await Promise.all([
+    const [rHoje,rMes,rCamp,rAdsets,rAds]=await Promise.all([
       fetch(urlHoje).then(r=>r.json()),
       fetch(urlMes).then(r=>r.json()),
-      fetch(urlCamp).then(r=>r.json())
+      fetch(urlCamp).then(r=>r.json()),
+      fetch(urlAdsets).then(r=>r.json()),
+      fetch(urlAds).then(r=>r.json())
     ]);
 
     const dHoje=(rHoje.data&&rHoje.data[0])||{};
     const dMes=(rMes.data&&rMes.data[0])||{};
 
-    // Processa campanhas
-    const campaigns=(rCamp.data||[]).map(c=>({
-      name:c.name,
-      status:c.status,
-      spend:Number((c.insights&&c.insights.data&&c.insights.data[0]&&c.insights.data[0].spend)||0),
-      impressions:Number((c.insights&&c.insights.data&&c.insights.data[0]&&c.insights.data[0].impressions)||0),
-      clicks:Number((c.insights&&c.insights.data&&c.insights.data[0]&&c.insights.data[0].clicks)||0)
-    })).filter(c=>c.spend>0||c.status==='ACTIVE').sort((a,b)=>b.spend-a.spend);
+    function getAction(actions,type){const a=(actions||[]).find(x=>x.action_type===type);return a?Number(a.value||0):0;}
+    function getActionVal(action_values,type){const a=(action_values||[]).find(x=>x.action_type===type);return a?Number(a.value||0):0;}
+    function getCPA(cost_per_action,type){const a=(cost_per_action||[]).find(x=>x.action_type===type);return a?Number(a.value||0):0;}
+
+    const leadsHoje=getAction(dHoje.actions,'onsite_conversion.messaging_conversation_started_7d')||getAction(dHoje.actions,'lead');
+    const vendasHoje=getAction(dHoje.actions,'purchase')||getAction(dHoje.actions,'omni_purchase');
+    const valorVendasHoje=getActionVal(dHoje.action_values,'purchase')||getActionVal(dHoje.action_values,'omni_purchase');
+    const leadsMes=getAction(dMes.actions,'onsite_conversion.messaging_conversation_started_7d')||getAction(dMes.actions,'lead');
+    const vendasMes=getAction(dMes.actions,'purchase')||getAction(dMes.actions,'omni_purchase');
+    const valorVendasMes=getActionVal(dMes.action_values,'purchase')||getActionVal(dMes.action_values,'omni_purchase');
+    const cplMes=Number(dMes.spend||0)>0&&leadsMes>0?(Number(dMes.spend)/leadsMes).toFixed(2):0;
+    const cplHoje=getCPA(dHoje.cost_per_action_type,'onsite_conversion.messaging_conversation_started_7d')||getCPA(dHoje.cost_per_action_type,'lead');
+
+    function parseIns(ins){
+      const i=ins||{};
+      const leads=getAction(i.actions,'onsite_conversion.messaging_conversation_started_7d')||getAction(i.actions,'lead');
+      const vendas=getAction(i.actions,'purchase')||getAction(i.actions,'omni_purchase');
+      const cpl_raw=getCPA(i.cost_per_action_type,'onsite_conversion.messaging_conversation_started_7d')||getCPA(i.cost_per_action_type,'lead');
+      const spend=Number(i.spend||0);
+      return {spend,impressions:Number(i.impressions||0),clicks:Number(i.clicks||0),reach:Number(i.reach||0),leads,vendas,cpm:Number(i.cpm||0),ctr:Number(i.ctr||0),freq:Number(i.frequency||0),cpl:cpl_raw>0?cpl_raw:(leads>0?spend/leads:0)};
+    }
+
+    const campaigns=(rCamp.data||[]).map(c=>{
+      const ins=(c.insights&&c.insights.data&&c.insights.data[0])||{};
+      return {id:c.id,name:c.name,status:c.status,...parseIns(ins)};
+    }).filter(c=>c.spend>0||c.status==='ACTIVE').sort((a,b)=>b.spend-a.spend);
+
+    const adsets=(rAdsets.data||[]).map(s=>{
+      const ins=(s.insights&&s.insights.data&&s.insights.data[0])||{};
+      return {id:s.id,name:s.name,status:s.status,campaignId:s.campaign_id,...parseIns(ins)};
+    }).filter(s=>s.spend>0||s.status==='ACTIVE');
+
+    const ads=(rAds.data||[]).map(a=>{
+      const ins=(a.insights&&a.insights.data&&a.insights.data[0])||{};
+      const thumb=a.creative&&a.creative.thumbnail_url;
+      const cname=a.creative&&a.creative.name;
+      return {id:a.id,name:a.name||(cname||'Criativo'),status:a.status,adsetId:a.adset_id,campaignId:a.campaign_id,thumb,...parseIns(ins)};
+    }).filter(a=>a.spend>0||a.status==='ACTIVE');
 
     // Busca seguidores do Instagram (se tiver ig_user_id configurado)
     let igFollowers=Number(state.config.igFollowers||0);
@@ -3062,17 +3163,13 @@ async function syncMetaAds(){
     }
 
     state.config.adsData={
-      today:Number(dHoje.spend||0),
-      month:Number(dMes.spend||0),
-      impressions:Number(dMes.impressions||0),
-      clicks:Number(dMes.clicks||0),
-      reach:Number(dMes.reach||0),
-      cpm:Number(dMes.cpm||0),
-      cpc:Number(dMes.cpc||0),
-      todayImpressions:Number(dHoje.impressions||0),
-      todayClicks:Number(dHoje.clicks||0),
-      campaigns,
-      followersByDay
+      today:Number(dHoje.spend||0),month:Number(dMes.spend||0),
+      impressions:Number(dMes.impressions||0),clicks:Number(dMes.clicks||0),
+      reach:Number(dMes.reach||0),cpm:Number(dMes.cpm||0),cpc:Number(dMes.cpc||0),
+      todayImpressions:Number(dHoje.impressions||0),todayClicks:Number(dHoje.clicks||0),
+      leadsHoje,vendasHoje,valorVendasHoje,cplHoje,
+      leadsMes,vendasMes,valorVendasMes,cplMes:Number(cplMes),
+      campaigns,adsets,ads,followersByDay
     };
     state.config.adsLastSync=new Date().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     save('config');setSyncStatus('ok');render();
