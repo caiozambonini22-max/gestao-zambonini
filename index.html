@@ -513,6 +513,19 @@ function renderDashboard(){
   const periodLabel=dashPeriod==='day'?dashDay:dashPeriod==='month'?MESES[dashMonth]+' '+dashYear:String(dashYear);
   const years=Array.from({length:81},(_,i)=>new Date().getFullYear()-5+i);
 
+  // Seguidores por período
+  if(!window._igPeriod)window._igPeriod='hoje';
+  if(!window._igCustomDate)window._igCustomDate=new Date().toISOString().slice(0,10);
+  const fbd=(state.config.adsData&&state.config.adsData.followersByDay)||[];
+  const todayStr=new Date().toISOString().slice(0,10);
+  const yesterdayStr=new Date(Date.now()-86400000).toISOString().slice(0,10);
+  function igDelta(dateStr){const d=fbd.find(x=>x.date===dateStr);return d?Number(d.delta||0):0;}
+  function igDeltaRange(n){return fbd.filter(x=>x.date>=new Date(Date.now()-n*86400000).toISOString().slice(0,10)&&x.date<=todayStr).reduce((a,x)=>a+Number(x.delta||0),0);}
+  const igPeriodLabel={'hoje':'Hoje','ontem':'Ontem','7d':'7 dias','30d':'30 dias','custom':'Data'}[window._igPeriod]||'Hoje';
+  const igPeriodDelta=window._igPeriod==='hoje'?igDelta(todayStr):window._igPeriod==='ontem'?igDelta(yesterdayStr):window._igPeriod==='7d'?igDeltaRange(7):window._igPeriod==='30d'?igDeltaRange(30):igDelta(window._igCustomDate);
+  const igPeriodSpend=window._igPeriod==='hoje'?(state.config.adsData&&Number(state.config.adsData.today||0)):window._igPeriod==='30d'?(state.config.adsData&&Number(state.config.adsData.month||0)):0;
+  const igCustoSeg=igPeriodDelta>0&&igPeriodSpend>0?(igPeriodSpend/igPeriodDelta).toFixed(2):null;
+
   let citiesHTML='';
   if(topCities.length===0){citiesHTML='<div class="empty"><div class="empty-ic">📍</div><p>Sem dados no periodo</p></div>';}
   else{topCities.forEach(([city,data],i)=>{
@@ -567,14 +580,30 @@ function renderDashboard(){
       </div>
       <div class="card">
         <div class="ig-top"></div>
-        <div class="ct">📱 Instagram — Seguidores</div>
-        <div style="font-size:26px;font-weight:800;margin-bottom:6px;color:var(--tx)">${igF>0?igF.toLocaleString('pt-BR'):'—'}</div>
-        ${state.config.igUserId?`<div style="font-size:10px;color:var(--gr);margin-bottom:6px">✅ Sincronização automática ativa</div>`:`<div style="font-size:10px;color:var(--txd);margin-bottom:6px">Manual — configure o IG User ID para auto-sync</div>`}
-        <div style="display:flex;gap:6px;margin-bottom:10px">
-          <div style="flex:1;background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center"><div style="font-size:9px;color:var(--txd);margin-bottom:2px">Hoje</div><div style="font-size:13px;font-weight:700;color:${Number(state.config.igF1||0)>=0?'var(--gr)':'var(--rd)'}">${Number(state.config.igF1||0)>0?'+':''}${state.config.igF1||0}</div></div>
-          <div style="flex:1;background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center"><div style="font-size:9px;color:var(--txd);margin-bottom:2px">7 dias</div><div style="font-size:13px;font-weight:700;color:${igF7>=0?'var(--gr)':'var(--rd)'}">${igF7>0?'+':''}${igF7}</div></div>
-          <div style="flex:1;background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center"><div style="font-size:9px;color:var(--txd);margin-bottom:2px">30 dias</div><div style="font-size:13px;font-weight:700;color:${igF30>=0?'var(--gr)':'var(--rd)'}">${igF30>0?'+':''}${igF30}</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div class="ct">📱 Instagram — Seguidores</div>
+          ${state.config.igUserId?`<span style="font-size:9px;color:var(--gr);font-weight:600">● Auto</span>`:''}
         </div>
+        <div style="font-size:28px;font-weight:800;color:var(--tx);margin-bottom:10px">${igF>0?igF.toLocaleString('pt-BR'):'—'}</div>
+
+        <!-- Filtros de período -->
+        <div style="display:flex;gap:5px;margin-bottom:10px;flex-wrap:wrap">
+          ${['hoje','ontem','7d','30d'].map(p=>`<button onclick="window._igPeriod='${p}';render()" style="padding:3px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid ${window._igPeriod===p?'var(--or)':'var(--bd)'};background:${window._igPeriod===p?'var(--or)':'transparent'};color:${window._igPeriod===p?'#fff':'var(--txm)'}">
+            ${{hoje:'Hoje',ontem:'Ontem','7d':'7 dias','30d':'30 dias'}[p]}
+          </button>`).join('')}
+          <input type="date" value="${window._igCustomDate}" onchange="window._igPeriod='custom';window._igCustomDate=this.value;render()" style="padding:2px 6px;border-radius:20px;font-size:11px;border:1px solid ${window._igPeriod==='custom'?'var(--or)':'var(--bd)'};background:${window._igPeriod==='custom'?'var(--ordim)':'transparent'};color:var(--tx);cursor:pointer">
+        </div>
+
+        <!-- Resultado do período -->
+        <div style="background:var(--sf3);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid ${igPeriodDelta>0?'rgba(34,197,94,.3)':igPeriodDelta<0?'rgba(239,68,68,.2)':'var(--bd)'}">
+          <div style="font-size:10px;color:var(--txd);margin-bottom:4px">Novos seguidores — ${igPeriodLabel}</div>
+          <div style="font-size:22px;font-weight:700;color:${igPeriodDelta>0?'var(--gr)':igPeriodDelta<0?'var(--rd)':'var(--txm)'}">
+            ${igPeriodDelta>0?'+':''}${igPeriodDelta}
+            ${fbd.length===0?`<span style="font-size:10px;color:var(--txd);font-weight:400"> — sincronize para ver</span>`:''}
+          </div>
+          ${igCustoSeg?`<div style="font-size:11px;color:var(--txd);margin-top:4px">💰 Custo por seguidor: <strong style="color:var(--or)">R$ ${igCustoSeg}</strong></div>`:''}
+        </div>
+
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px">
           <div class="field"><label>Total</label><input type="number" value="${state.config.igFollowers||''}" oninput="updateConfig('igFollowers',Number(this.value))" placeholder="43000"></div>
           <div class="field"><label>+Hoje</label><input type="number" value="${state.config.igF1||''}" oninput="updateConfig('igF1',Number(this.value))" placeholder="0"></div>
@@ -2981,11 +3010,23 @@ async function syncMetaAds(){
 
     // Busca seguidores do Instagram (se tiver ig_user_id configurado)
     let igFollowers=Number(state.config.igFollowers||0);
+    let followersByDay=[];
     if(state.config.igUserId&&token){
       try{
         const rIg=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}?fields=followers_count&access_token=${token}`).then(r=>r.json());
         if(rIg.followers_count){igFollowers=rIg.followers_count;state.config.igFollowers=igFollowers;}
-      }catch{}
+
+        // Busca variação diária dos últimos 30 dias
+        const since30=Math.floor((Date.now()-30*86400000)/1000);
+        const until=Math.floor(Date.now()/1000);
+        const rInsights=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}/insights?metric=follower_count&period=day&since=${since30}&until=${until}&access_token=${token}`).then(r=>r.json());
+        if(rInsights.data&&rInsights.data[0]&&rInsights.data[0].values){
+          followersByDay=rInsights.data[0].values.map(v=>({
+            date:v.end_time?v.end_time.slice(0,10):new Date().toISOString().slice(0,10),
+            delta:v.value
+          }));
+        }
+      }catch(e){console.warn('Instagram insights error:',e);}
     }
 
     state.config.adsData={
@@ -2998,7 +3039,8 @@ async function syncMetaAds(){
       cpc:Number(dMes.cpc||0),
       todayImpressions:Number(dHoje.impressions||0),
       todayClicks:Number(dHoje.clicks||0),
-      campaigns
+      campaigns,
+      followersByDay
     };
     state.config.adsLastSync=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     save('config');setSyncStatus('ok');render();
