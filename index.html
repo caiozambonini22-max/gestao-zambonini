@@ -567,16 +567,19 @@ function renderDashboard(){
       </div>
       <div class="card">
         <div class="ig-top"></div>
-        <div class="ct">Instagram — Seguidores</div>
-        <div style="font-size:22px;font-weight:700;margin-bottom:8px">${igF>0?igF.toLocaleString('pt-BR'):'—'}</div>
+        <div class="ct">📱 Instagram — Seguidores</div>
+        <div style="font-size:26px;font-weight:800;margin-bottom:6px;color:var(--tx)">${igF>0?igF.toLocaleString('pt-BR'):'—'}</div>
+        ${state.config.igUserId?`<div style="font-size:10px;color:var(--gr);margin-bottom:6px">✅ Sincronização automática ativa</div>`:`<div style="font-size:10px;color:var(--txd);margin-bottom:6px">Manual — configure o IG User ID para auto-sync</div>`}
         <div style="display:flex;gap:6px;margin-bottom:10px">
+          <div style="flex:1;background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center"><div style="font-size:9px;color:var(--txd);margin-bottom:2px">Hoje</div><div style="font-size:13px;font-weight:700;color:${Number(state.config.igF1||0)>=0?'var(--gr)':'var(--rd)'}">${Number(state.config.igF1||0)>0?'+':''}${state.config.igF1||0}</div></div>
           <div style="flex:1;background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center"><div style="font-size:9px;color:var(--txd);margin-bottom:2px">7 dias</div><div style="font-size:13px;font-weight:700;color:${igF7>=0?'var(--gr)':'var(--rd)'}">${igF7>0?'+':''}${igF7}</div></div>
           <div style="flex:1;background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center"><div style="font-size:9px;color:var(--txd);margin-bottom:2px">30 dias</div><div style="font-size:13px;font-weight:700;color:${igF30>=0?'var(--gr)':'var(--rd)'}">${igF30>0?'+':''}${igF30}</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-          <div class="field"><label>Total</label><input type="number" value="${state.config.igFollowers||''}" oninput="updateConfig('igFollowers',Number(this.value))" placeholder="0"></div>
-          <div class="field"><label>+7 dias</label><input type="number" value="${state.config.igF7||''}" oninput="updateConfig('igF7',Number(this.value))" placeholder="0"></div>
-          <div class="field"><label>+30 dias</label><input type="number" value="${state.config.igF30||''}" oninput="updateConfig('igF30',Number(this.value))" placeholder="0"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px">
+          <div class="field"><label>Total</label><input type="number" value="${state.config.igFollowers||''}" oninput="updateConfig('igFollowers',Number(this.value))" placeholder="43000"></div>
+          <div class="field"><label>+Hoje</label><input type="number" value="${state.config.igF1||''}" oninput="updateConfig('igF1',Number(this.value))" placeholder="0"></div>
+          <div class="field"><label>+7d</label><input type="number" value="${state.config.igF7||''}" oninput="updateConfig('igF7',Number(this.value))" placeholder="0"></div>
+          <div class="field"><label>+30d</label><input type="number" value="${state.config.igF30||''}" oninput="updateConfig('igF30',Number(this.value))" placeholder="0"></div>
         </div>
       </div>
       <div class="card">
@@ -2852,29 +2855,49 @@ function renderMetricas(){
         <div class="ct">Meta Ads — Integracao Automatica</div>
         <div style="font-size:11px;color:var(--txd)">Ultimo sync: ${lastSync}</div>
       </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;align-items:center">
+        ${state.config.adsLastSync?`<span style="font-size:11px;color:var(--txd)">Atualizado: ${state.config.adsLastSync}</span>`:''}
         <button class="btn bg2 sm" onclick="openAdsConfig()">⚙️ Configurar</button>
         <button class="btn bp sm" onclick="syncMetaAds()">🔄 Sincronizar Agora</button>
       </div>
     </div>
     ${state.config.metaToken&&state.config.metaAdAccount?`
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px">
-      <div class="card" style="border-color:rgba(249,115,22,.2)"><div class="ct">Gasto Hoje</div><div class="cv cv-or">${fmtBRL(gastoHoje)}</div></div>
-      <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">Gasto no Mes</div><div class="cv cv-rd">${fmtBRL(gastoMes)}</div></div>
-      <div class="card" style="border-color:rgba(34,197,94,.2)"><div class="ct">ROAS do Mes</div><div class="cv ${Number(roasMes)>=2?'cv-gr':Number(roasMes)>=1?'cv-or':'cv-rd'}">${gastoMes>0?roasMes+'x':'—'}</div></div>
-      <div class="card"><div class="ct">Custo por Lead</div><div class="cv cv-bl">R$ ${cpl}</div></div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px">
+      <div class="card" style="border-color:rgba(249,115,22,.3)"><div class="ct">💸 Gasto Hoje</div><div class="cv cv-or" style="font-size:20px">${fmtBRL(gastoHoje)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${(state.config.adsData&&state.config.adsData.todayImpressions)||0} impressões hoje</div></div>
+      <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">📅 Gasto no Mês</div><div class="cv cv-rd" style="font-size:20px">${fmtBRL(gastoMes)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${impressoes.toLocaleString('pt-BR')} impressões</div></div>
+      <div class="card" style="border-color:${Number(roasMes)>=2?'rgba(34,197,94,.3)':'rgba(239,68,68,.2)'}"><div class="ct">📈 ROAS Mês</div><div class="cv ${Number(roasMes)>=2?'cv-gr':Number(roasMes)>=1?'cv-or':'cv-rd'}" style="font-size:20px">${gastoMes>0?roasMes+'x':'—'}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">Receita / Gasto</div></div>
+      <div class="card"><div class="ct">🖱 CTR / CPC</div><div class="cv cv-bl" style="font-size:20px">${ctr}%</div><div style="font-size:10px;color:var(--txd);margin-top:2px">CPC: R$ ${cpc}</div></div>
+      <div class="card"><div class="ct">🎯 CPL / CAC</div><div class="cv" style="font-size:20px;color:var(--or)">R$ ${cpl}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">Custo por lead</div></div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-      <div style="background:var(--sf3);border-radius:7px;padding:12px;text-align:center"><div style="font-size:10px;color:var(--txd);margin-bottom:4px">CTR (cliques/impressoes)</div><div style="font-size:18px;font-weight:700;color:var(--or)">${ctr}%</div></div>
-      <div style="background:var(--sf3);border-radius:7px;padding:12px;text-align:center"><div style="font-size:10px;color:var(--txd);margin-bottom:4px">CPC (custo por clique)</div><div style="font-size:18px;font-weight:700;color:var(--bl)">R$ ${cpc}</div></div>
-      <div style="background:var(--sf3);border-radius:7px;padding:12px;text-align:center"><div style="font-size:10px;color:var(--txd);margin-bottom:4px">CAC (custo por cliente)</div><div style="font-size:18px;font-weight:700;color:var(--rd)">R$ ${cac}</div></div>
-    </div>
+    ${(()=>{
+      const camps=(state.config.adsData&&state.config.adsData.campaigns)||[];
+      if(!camps.length) return '<div style="padding:10px;font-size:11px;color:var(--txd);text-align:center">Clique em 🔄 Sincronizar para carregar campanhas</div>';
+      return `<div class="card" style="padding:0;overflow:hidden;margin-bottom:12px">
+        <div style="padding:10px 14px;border-bottom:1px solid var(--bd);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600">📊 Campanhas Ativas Hoje</div>
+        <table style="width:100%">
+          <thead><tr style="background:var(--sf3)">
+            <th style="text-align:left;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Campanha</th>
+            <th style="text-align:left;padding:8px 10px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Status</th>
+            <th style="text-align:right;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Gasto Hoje</th>
+            <th style="text-align:right;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Impressões</th>
+            <th style="text-align:right;padding:8px 14px;font-size:10px;color:var(--txd);font-weight:600;text-transform:uppercase">Cliques</th>
+          </tr></thead>
+          <tbody>${camps.map((c,i)=>`<tr style="border-bottom:1px solid var(--bd);background:${i%2?'var(--sf3)40':'transparent'}">
+            <td style="padding:9px 14px;font-size:12px;font-weight:500;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.name)}</td>
+            <td style="padding:9px 10px"><span style="font-size:10px;padding:2px 7px;border-radius:10px;font-weight:700;background:${c.status==='ACTIVE'?'rgba(34,197,94,.15)':'rgba(100,100,100,.15)'};color:${c.status==='ACTIVE'?'var(--gr)':'var(--txd)'}">${c.status==='ACTIVE'?'Ativa':'Pausada'}</span></td>
+            <td style="padding:9px 14px;text-align:right;color:var(--or);font-weight:700">${c.spend>0?fmtBRL(c.spend):'—'}</td>
+            <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.impressions>0?c.impressions.toLocaleString('pt-BR'):'—'}</td>
+            <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.clicks>0?c.clicks:'—'}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    })()}
     `:`
     <div style="padding:30px;text-align:center;background:var(--sf3);border-radius:8px">
       <div style="font-size:32px;margin-bottom:10px">📱</div>
-      <div style="font-weight:700;margin-bottom:6px">Conecte sua conta de anuncios</div>
-      <div style="font-size:12px;color:var(--txm);margin-bottom:16px">Puxe automaticamente: gasto diario, ROAS, CTR, CPC, CPL e CAC</div>
-      <button class="btn bp" onclick="openAdsConfig()">Configurar Meta Ads</button>
+      <div style="font-weight:700;margin-bottom:6px">Conecte sua conta de anúncios</div>
+      <div style="font-size:12px;color:var(--txm);margin-bottom:16px">Gasto do dia, por campanha, ROAS, CTR, CPC e CAC em tempo real</div>
+      <button class="btn bp" onclick="openAdsConfig()">⚙️ Configurar Meta Ads</button>
     </div>
     `}
   </div>`;
@@ -2883,19 +2906,32 @@ function renderMetricas(){
 function openAdsConfig(){
   const overlay=document.createElement('div');overlay.className='overlay';
   overlay.innerHTML=`<div class="modal modal-sm">
-    <div class="mt2">Configurar Meta Ads API</div>
+    <div class="mt2">⚙️ Configurar Meta Ads</div>
     <div class="fg">
-      <div style="padding:12px;background:var(--ordim);border:1px solid var(--bdb);border-radius:7px;font-size:12px;line-height:1.7;color:var(--txm)">
-        <strong style="color:var(--or)">Como pegar o Access Token:</strong><br>
-        1. Acesse <strong>business.facebook.com</strong><br>
-        2. Va em Configuracoes → API de Marketing<br>
-        3. Gere um token com permissao <strong>ads_read</strong><br>
-        4. Copie o Ad Account ID (comeca com act_)
+      <div style="padding:12px;background:var(--ordim);border:1px solid var(--bdb);border-radius:7px;font-size:12px;line-height:1.8;color:var(--txm)">
+        <strong style="color:var(--or)">Token que não expira (recomendado):</strong><br>
+        1. <strong>business.facebook.com/settings</strong> → Usuários do Sistema<br>
+        2. Criar "ERP Zambonini" → Administrador → Gerar Token<br>
+        3. Permissões: <code>ads_read</code> + <code>instagram_basic</code> + <code>pages_show_list</code>
       </div>
-      <div class="field"><label>Ad Account ID</label><input id="ads-account" value="${state.config.metaAdAccount||''}" placeholder="act_123456789"></div>
+      <div class="field"><label>Ad Account ID</label><input id="ads-account" value="${state.config.metaAdAccount||''}" placeholder="act_123456789 ou só os números"></div>
       <div class="field"><label>Access Token</label><textarea id="ads-token" rows="3" style="resize:vertical;font-family:monospace;font-size:10px">${state.config.metaToken||''}</textarea></div>
+      <div class="field">
+        <label>Instagram User ID <span style="color:var(--txd);font-size:10px">(para buscar seguidores automaticamente)</span></label>
+        <input id="ads-igid" value="${state.config.igUserId||''}" placeholder="Ex: 17841400000000000">
+        <div style="font-size:10px;color:var(--txd);margin-top:3px">Cole na barra: graph.facebook.com/me/accounts?access_token=SEU_TOKEN → copie o instagram_business_account id</div>
+      </div>
+      <div style="border-top:1px solid var(--bd);padding-top:10px;margin-top:2px">
+        <div style="font-size:10px;font-weight:600;color:var(--txd);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Seguidores Instagram (manual)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
+          <div class="field"><label>Total atual</label><input type="number" id="ig-total" value="${state.config.igFollowers||''}" placeholder="43000"></div>
+          <div class="field"><label>+Hoje</label><input type="number" id="ig-hoje" value="${state.config.igF1||''}" placeholder="0"></div>
+          <div class="field"><label>+7 dias</label><input type="number" id="ig-7d" value="${state.config.igF7||''}" placeholder="0"></div>
+          <div class="field"><label>+30 dias</label><input type="number" id="ig-30d" value="${state.config.igF30||''}" placeholder="0"></div>
+        </div>
+      </div>
     </div>
-    <div class="mf"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button><button class="btn bp" onclick="saveAdsConfig()">Salvar e Testar</button></div>
+    <div class="mf"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button><button class="btn bp" onclick="saveAdsConfig()">Salvar e Sincronizar</button></div>
   </div>`;
   overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};document.body.appendChild(overlay);
 }
@@ -2903,6 +2939,11 @@ function openAdsConfig(){
 function saveAdsConfig(){
   state.config.metaAdAccount=document.getElementById('ads-account').value.trim();
   state.config.metaToken=document.getElementById('ads-token').value.trim();
+  state.config.igUserId=(document.getElementById('ads-igid').value||'').trim();
+  state.config.igFollowers=Number(document.getElementById('ig-total').value||0);
+  state.config.igF1=Number(document.getElementById('ig-hoje').value||0);
+  state.config.igF7=Number(document.getElementById('ig-7d').value||0);
+  state.config.igF30=Number(document.getElementById('ig-30d').value||0);
   save('config');document.querySelector('.overlay').remove();syncMetaAds();
 }
 
@@ -2913,15 +2954,56 @@ async function syncMetaAds(){
   try{
     const today=new Date().toISOString().slice(0,10);
     const firstDay=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-    const fields='spend,impressions,clicks';
+    const fields='spend,impressions,clicks,reach,cpm,cpc';
+
+    // Gasto hoje, mês e por campanha
     const urlHoje=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range={"since":"${today}","until":"${today}"}&access_token=${token}`;
     const urlMes=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range={"since":"${firstDay}","until":"${today}"}&access_token=${token}`;
-    const [rHoje,rMes]=await Promise.all([fetch(urlHoje).then(r=>r.json()),fetch(urlMes).then(r=>r.json())]);
-    const dHoje=(rHoje.data&&rHoje.data[0])||{};const dMes=(rMes.data&&rMes.data[0])||{};
-    state.config.adsData={today:Number(dHoje.spend||0),month:Number(dMes.spend||0),impressions:Number(dMes.impressions||0),clicks:Number(dMes.clicks||0)};
-    state.config.adsLastSync=new Date().toISOString();
+    const urlCamp=`https://graph.facebook.com/v19.0/${account}/campaigns?fields=name,status,insights.date_preset(today){spend,impressions,clicks}&limit=20&access_token=${token}`;
+
+    const [rHoje,rMes,rCamp]=await Promise.all([
+      fetch(urlHoje).then(r=>r.json()),
+      fetch(urlMes).then(r=>r.json()),
+      fetch(urlCamp).then(r=>r.json())
+    ]);
+
+    const dHoje=(rHoje.data&&rHoje.data[0])||{};
+    const dMes=(rMes.data&&rMes.data[0])||{};
+
+    // Processa campanhas
+    const campaigns=(rCamp.data||[]).map(c=>({
+      name:c.name,
+      status:c.status,
+      spend:Number((c.insights&&c.insights.data&&c.insights.data[0]&&c.insights.data[0].spend)||0),
+      impressions:Number((c.insights&&c.insights.data&&c.insights.data[0]&&c.insights.data[0].impressions)||0),
+      clicks:Number((c.insights&&c.insights.data&&c.insights.data[0]&&c.insights.data[0].clicks)||0)
+    })).filter(c=>c.spend>0||c.status==='ACTIVE').sort((a,b)=>b.spend-a.spend);
+
+    // Busca seguidores do Instagram (se tiver ig_user_id configurado)
+    let igFollowers=Number(state.config.igFollowers||0);
+    if(state.config.igUserId&&token){
+      try{
+        const rIg=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}?fields=followers_count&access_token=${token}`).then(r=>r.json());
+        if(rIg.followers_count){igFollowers=rIg.followers_count;state.config.igFollowers=igFollowers;}
+      }catch{}
+    }
+
+    state.config.adsData={
+      today:Number(dHoje.spend||0),
+      month:Number(dMes.spend||0),
+      impressions:Number(dMes.impressions||0),
+      clicks:Number(dMes.clicks||0),
+      reach:Number(dMes.reach||0),
+      cpm:Number(dMes.cpm||0),
+      cpc:Number(dMes.cpc||0),
+      todayImpressions:Number(dHoje.impressions||0),
+      todayClicks:Number(dHoje.clicks||0),
+      campaigns
+    };
+    state.config.adsLastSync=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     save('config');setSyncStatus('ok');render();
-  }catch(e){setSyncStatus('error');alert('Erro ao conectar com Meta Ads. Verifique o token.');}
+    showToast('✅ Meta Ads sincronizado!','gr');
+  }catch(e){setSyncStatus('error');showToast('❌ Erro ao conectar com Meta Ads. Verifique o token.','rd');}
 }
 
 
