@@ -355,7 +355,6 @@ function doLogin(){
 }
 async function loadAll(){
   document.getElementById('loading-msg').textContent='Carregando dados...';
-  // Informa se está acordando o Supabase
   setTimeout(()=>{
     const el=document.getElementById('loading-msg');
     if(el&&document.getElementById('loading-screen').style.display!=='none'){
@@ -364,70 +363,59 @@ async function loadAll(){
   }, 4000);
   const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
 
-  // ── Mostra dados em cache imediatamente (sem esperar Supabase) ──
-  let hasCached = false;
+  // ── PASSO 1: Carrega localStorage IMEDIATAMENTE (fonte primária) ──
   keys.forEach(k=>{
     try{
-      const cached = localStorage.getItem('zb_cache_'+k);
+      const cached=localStorage.getItem('zb_cache_'+k);
       if(cached){
-        const v = JSON.parse(cached);
+        const v=JSON.parse(cached);
         if(k==='maqs'){
           state[k]=v.map(m=>{
-            if(m.rates&&!m.rates.presencial){
-              const p={},l={};
-              for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}
-              return {...m,rates:{presencial:p,link:l}};
-            }
+            if(m.rates&&!m.rates.presencial){const p={},l={};for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}return {...m,rates:{presencial:p,link:l}};}
             return m;
           });
-        } else { state[k]=v; }
-        hasCached=true;
+        }else{state[k]=v;}
       }
     }catch{}
   });
 
-  // Se tem cache, mostra o app imediatamente e atualiza em background
-  if(hasCached){
-    document.getElementById('loading-screen').style.display='none';
-    document.getElementById('app').style.display='flex';
-    render();
-  }
-
-  // ── Busca Supabase em paralelo (muito mais rápido) ──
-  try{
-    const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),30000));
-    const fetchAll = Promise.all(keys.map(async k=>{
-      const v = await dbGet(k);
-      if(v!==null){
-        // Salva cache local
-        try{ localStorage.setItem('zb_cache_'+k, JSON.stringify(v)); }catch{}
-        return {k,v};
-      }
-      return {k,v:null};
-    }));
-
-    const results = await Promise.race([fetchAll, timeout]);
-    results.forEach(({k,v})=>{
-      if(v===null) return;
-      if(k==='maqs'){
-        state[k]=v.map(m=>{
-          if(m.rates&&!m.rates.presencial){
-            const p={},l={};
-            for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}
-            return {...m,rates:{presencial:p,link:l}};
-          }
-          return m;
-        });
-      } else { state[k]=v; }
-    });
-  }catch(e){
-    // Timeout ou erro: se não tinha cache, mostra app vazio mesmo assim
-    setSyncStatus('error');
-  }
-
+  // Mostra o app com dados locais imediatamente
   document.getElementById('loading-screen').style.display='none';
   document.getElementById('app').style.display='flex';
   render();
+
+  // ── PASSO 2: Sincroniza com Supabase em background ──
+  // REGRA: só sobrescreve se Supabase tiver MAIS dados (ex: mais pedidos)
+  // Nunca sobrescreve dados locais com dados vazios do Supabase
+  try{
+    const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),30000));
+    const fetchAll=Promise.all(keys.map(async k=>{
+      const v=await dbGet(k);
+      return {k,v};
+    }));
+    const results=await Promise.race([fetchAll,timeout]);
+    let updated=false;
+    results.forEach(({k,v})=>{
+      if(v===null||v===undefined)return;
+      // Supabase é a fonte de verdade — mas só sobrescreve se tiver dados
+      // Para arrays: só usa Supabase se retornou algo (array não vazio ou igual ao local)
+      const local=state[k];
+      const supEmpty=Array.isArray(v)&&v.length===0&&Array.isArray(local)&&local.length>0;
+      if(supEmpty){
+        // Supabase está vazio mas local tem dados — faz upload pro Supabase (recuperação)
+        dbSet(k,state[k]);
+        return;
+      }
+      if(k==='maqs'){state[k]=v.map(m=>{if(m.rates&&!m.rates.presencial){const p={},l={};for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}return {...m,rates:{presencial:p,link:l}};}return m;});}
+      else{state[k]=v;}
+      try{localStorage.setItem('zb_cache_'+k,JSON.stringify(state[k]));}catch{}
+      updated=true;
+    });
+    if(updated)render();
+    setSyncStatus('ok');
+  }catch(e){
+    setSyncStatus('error');
+  }
 }
 
 // ============ RENDER ENGINE ============
@@ -2564,7 +2552,9 @@ function makeSearchSelect(id,selectedId,options,onSelectCode){
   const lbl=sel?sel.l:'';
   return `<div style="position:relative">
     <input id="ss-${id}" value="${esc(lbl)}" placeholder="Buscar produto..." autocomplete="off"
-      onfocus="openSS('${id}')" oninput="filterSS('${id}',this.value)"
+      onfocus="this.select();openSS('${id}')"
+      onclick="this.select();openSS('${id}')"
+      oninput="filterSS('${id}',this.value)"
       onblur="setTimeout(()=>closeSS('${id}'),220)"
       style="width:100%;padding-right:28px">
     <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);color:var(--txd);font-size:12px;pointer-events:none">▾</span>
@@ -2594,67 +2584,52 @@ function selectSS(id,val,lbl){
 }
 
 // ============ AUTOCOMPLETE CIDADE ============
-window._municipios=null;
-window._cityDbnc=null;
+const CIDADES_BR=[["Americana","SP"],["Anápolis","GO"],["Andradina","SP"],["Apucarana","PR"],["Aquidauana","MS"],["Araçatuba","SP"],["Aracaju","SE"],["Aracruz","ES"],["Araguaína","TO"],["Araguari","MG"],["Araraquara","SP"],["Araras","SP"],["Araxá","MG"],["Arcoverde","PE"],["Assis","SP"],["Atibaia","SP"],["Avare","SP"],["Bagé","RS"],["Balsas","MA"],["Barra Mansa","RJ"],["Barreiras","BA"],["Barretos","SP"],["Barrinha","SP"],["Barueri","SP"],["Bauru","SP"],["Bebedouro","SP"],["Belém","PA"],["Belford Roxo","RJ"],["Belo Horizonte","MG"],["Betim","MG"],["Birigui","SP"],["Blumenau","SC"],["Boa Vista","RR"],["Botucatu","SP"],["Bragança Paulista","SP"],["Caçador","SC"],["Cachoeira do Sul","RS"],["Cachoeiro de Itapemirim","ES"],["Cacoal","RO"],["Caldas Novas","GO"],["Camaçari","BA"],["Campina Grande","PB"],["Campinas","SP"],["Campo Grande","MS"],["Campo Mourão","PR"],["Campos dos Goytacazes","RJ"],["Canguçu","RS"],["Canindé","CE"],["Canoas","RS"],["Caratinga","MG"],["Cariacica","ES"],["Caruaru","PE"],["Casa Branca","SP"],["Cascavel","PR"],["Castanhal","PA"],["Catanduva","SP"],["Caucaia","CE"],["Caxias do Sul","RS"],["Chapecó","SC"],["Colatina","ES"],["Concórdia","SC"],["Conselheiro Lafaiete","MG"],["Contagem","MG"],["Corumbá","MS"],["Cotia","SP"],["Crateús","CE"],["Crato","CE"],["Criciúma","SC"],["Cubatão","SP"],["Cuiabá","MT"],["Curitiba","PR"],["Diadema","SP"],["Divinópolis","MG"],["Dourados","MS"],["Duque de Caxias","RJ"],["Erechim","RS"],["Esmeraldas","MG"],["Estrela","RS"],["Feira de Santana","BA"],["Fernandópolis","SP"],["Ferraz de Vasconcelos","SP"],["Florianópolis","SC"],["Formiga","MG"],["Fortaleza","CE"],["Franca","SP"],["Francisco Morato","SP"],["Franco da Rocha","SP"],["Foz do Iguaçu","PR"],["Garanhuns","PE"],["Garça","SP"],["Governador Valadares","MG"],["Gravataí","RS"],["Guarapari","ES"],["Guarapuava","PR"],["Guaratinguetá","SP"],["Guarujá","SP"],["Guarulhos","SP"],["Gurupi","TO"],["Hortolândia","SP"],["Ilhéus","BA"],["Imperatriz","MA"],["Indaiatuba","SP"],["Ipojuca","PE"],["Irecê","BA"],["Itabaiana","SE"],["Itabira","MG"],["Itabuna","BA"],["Itajaí","SC"],["Itajubá","MG"],["Itapema","SC"],["Itapetininga","SP"],["Itapeva","SP"],["Itapevi","SP"],["Itapipoca","CE"],["Itapira","SP"],["Itaúna","MG"],["Ituiutaba","MG"],["Itumbiara","GO"],["Jaboatão dos Guararapes","PE"],["Jacareí","SP"],["Jaú","SP"],["Jequié","BA"],["Ji-Paraná","RO"],["João Pessoa","PB"],["Joinville","SC"],["Juazeiro","BA"],["Juazeiro do Norte","CE"],["Juiz de Fora","MG"],["Jundiaí","SP"],["Lajeado","RS"],["Leme","SP"],["Lençóis Paulista","SP"],["Limeira","SP"],["Linhares","ES"],["Lins","SP"],["Londrina","PR"],["Lorena","SP"],["Lucas do Rio Verde","MT"],["Luziânia","GO"],["Maceió","AL"],["Macaé","RJ"],["Macapá","AP"],["Manaus","AM"],["Maracanaú","CE"],["Marau","RS"],["Marechal Cândido Rondon","PR"],["Mariana","MG"],["Maringá","PR"],["Marília","SP"],["Mauá","SP"],["Mesquita","RJ"],["Montes Claros","MG"],["Mossoró","RN"],["Muriaé","MG"],["Natal","RN"],["Niterói","RJ"],["Nova Friburgo","RJ"],["Nova Iguaçu","RJ"],["Nova Lima","MG"],["Nova Odessa","SP"],["Novo Hamburgo","RS"],["Olinda","PE"],["Osasco","SP"],["Ourinhos","SP"],["Palmas","TO"],["Palhoça","SC"],["Pará de Minas","MG"],["Paranaguá","PR"],["Parnaíba","PI"],["Parnamirim","RN"],["Passos","MG"],["Passo Fundo","RS"],["Patos de Minas","MG"],["Paulínia","SP"],["Paulo Afonso","BA"],["Pelotas","RS"],["Penápolis","SP"],["Petrópolis","RJ"],["Pinhais","PR"],["Piracicaba","SP"],["Poços de Caldas","MG"],["Porto Alegre","RS"],["Porto Seguro","BA"],["Porto Velho","RO"],["Pouso Alegre","MG"],["Presidente Prudente","SP"],["Primavera do Leste","MT"],["Recife","PE"],["Resende","RJ"],["Ribeirão das Neves","MG"],["Ribeirão Pires","SP"],["Ribeirão Preto","SP"],["Rio Branco","AC"],["Rio Claro","SP"],["Rio de Janeiro","RJ"],["Rio do Sul","SC"],["Rio Grande","RS"],["Rio Largo","AL"],["Rio Verde","GO"],["Rolândia","PR"],["Rondonópolis","MT"],["Salvador","BA"],["Santa Cruz do Sul","RS"],["Santa Maria","RS"],["Santa Rita","PB"],["Santana de Parnaíba","SP"],["Santo André","SP"],["Santos","SP"],["São Bernardo do Campo","SP"],["São Caetano do Sul","SP"],["São Carlos","SP"],["São Gonçalo","RJ"],["São João da Boa Vista","SP"],["São José","SC"],["São José do Rio Preto","SP"],["São José dos Campos","SP"],["São José dos Pinhais","PR"],["São Lourenço","MG"],["São Luís","MA"],["São Mateus","ES"],["São Paulo","SP"],["São Roque","SP"],["São Sebastião","SP"],["São Sebastião do Paraíso","MG"],["São Vicente","SP"],["Sapucaia do Sul","RS"],["Serra","ES"],["Sertãozinho","SP"],["Sinop","MT"],["Sorocaba","SP"],["Sobral","CE"],["Sumaré","SP"],["Suzano","SP"],["Taboão da Serra","SP"],["Taubaté","SP"],["Teófilo Otoni","MG"],["Teresina","PI"],["Teresópolis","RJ"],["Timóteo","MG"],["Toledo","PR"],["Ubá","MG"],["Uberaba","MG"],["Uberlândia","MG"],["Umuarama","PR"],["Uruguaiana","RS"],["Varginha","MG"],["Várzea Grande","MT"],["Viamão","RS"],["Viçosa","MG"],["Vila Velha","ES"],["Vitória","ES"],["Vitória da Conquista","BA"],["Volta Redonda","RJ"],["Votorantim","SP"],["Votuporanga","SP"],["Abaetetuba","PA"],["Acajutiba","BA"],["Acaraú","CE"],["Açailândia","MA"],["Alegrete","RS"],["Alfenas","MG"],["Altamira","PA"],["Alta Floresta","MT"],["Alvorada","RS"],["Amargosa","BA"],["Amparo","SP"],["Angra dos Reis","RJ"],["Aquiraz","CE"],["Araucária","PR"],["Barrinha","SP"],["Bebedouro","SP"],["Boa Esperança","ES"],["Cabo Frio","RJ"],["Cabrália Paulista","SP"],["Cachoeira Paulista","SP"],["Cachoeiras de Macacu","RJ"],["Cajazeiras","PB"],["Cambuí","MG"],["Campo Belo","MG"],["Campo Largo","PR"],["Campos do Jordão","SP"],["Cantagalo","RJ"],["Caxias","MA"],["Coruripe","AL"],["Dois Córregos","SP"],["Espírito Santo do Pinhal","SP"],["Estância","SE"],["Extrema","MG"],["Fernandópolis","SP"],["Guanambi","BA"],["Hortolândia","SP"],["Ibitinga","SP"],["Ibiúna","SP"],["Indaiatuba","SP"],["Iracemápolis","SP"],["Itanhaém","SP"],["Itaperuçu","PR"],["Jacareí","SP"],["Jaguariaíva","PR"],["Jales","SP"],["Januária","MG"],["Lauro de Freitas","BA"],["Leopoldina","MG"],["Mairiporã","SP"],["Mirassol","SP"],["Mogi das Cruzes","SP"],["Mogi Guaçu","SP"],["Mogi Mirim","SP"],["Nova Serrana","MG"],["Novo Horizonte","SP"],["Olímpia","SP"],["Orlândia","SP"],["Palmeiras de Goiás","GO"],["Paranaguá","PR"],["Piritiba","BA"],["Piraju","SP"],["Porangatu","GO"],["Porto Ferreira","SP"],["Porto União","SC"],["Rio Claro","SP"],["Rio das Ostras","RJ"],["Rosário do Sul","RS"],["Sabará","MG"],["Santa Cruz do Capibaribe","PE"],["Santa Rita do Passa Quatro","SP"],["Santo Antônio de Jesus","BA"],["São Gabriel","RS"],["São João del-Rei","MG"],["São Lourenço da Mata","PE"],["Sapucaia do Sul","RS"],["Senhor do Bonfim","BA"],["Serra Talhada","PE"],["Timóteo","MG"],["Trindade","GO"],["Tucuruí","PA"],["Urucânia","MG"],["Vargem Grande Paulista","SP"],["Vassouras","RJ"],["Venâncio Aires","RS"]];
 
-async function loadMunicipios(){
-  if(window._municipios)return window._municipios;
-  try{
-    const r=await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome');
-    const data=await r.json();
-    window._municipios=data.map(m=>({nome:m.nome,uf:m.microrregiao.mesorregiao.UF.sigla}));
-  }catch(e){window._municipios=[];}
-  return window._municipios;
-}
-
-function getCityDrop(){
-  let d=document.getElementById('_cdrop');
-  if(!d){
-    d=document.createElement('div');
-    d.id='_cdrop';
-    d.style.cssText='display:none;position:fixed;background:#1a1a1a;border:1px solid #f97316;border-radius:8px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.9)';
-    document.body.appendChild(d);
-    document.addEventListener('mousedown',e=>{if(!d.contains(e.target)&&e.target.id!=='order-city'&&e.target.id!=='order-del-city')d.style.display='none';});
-  }
-  return d;
-}
-
-async function onCityInput(stateId, q){
-  clearTimeout(window._cityDbnc);
-  const drop=getCityDrop();
+window._cityDbnc2=null;
+function onCityInput(stateId,q){
+  clearTimeout(window._cityDbnc2);
+  const drop=document.getElementById('_cdrop2')||createCityDrop();
   if(!q||q.length<2){drop.style.display='none';return;}
-  window._cityDbnc=setTimeout(async()=>{
-    const el=document.getElementById(stateId==='order-state'?'order-city':'order-del-city');
-    if(!el)return;
+  window._cityDbnc2=setTimeout(()=>{
+    const inputId=stateId==='order-state'?'order-city':'order-del-city';
+    const el=document.getElementById(inputId);
+    if(!el){drop.style.display='none';return;}
     const rect=el.getBoundingClientRect();
-    const muns=await loadMunicipios();
-    const q2=q.toLowerCase();
-    const matches=muns.filter(m=>m.nome.toLowerCase().includes(q2)).slice(0,12);
+    const q2=q.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const matches=CIDADES_BR.filter(([n])=>n.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes(q2)).slice(0,12);
     if(!matches.length){drop.style.display='none';return;}
-    drop.style.cssText=`display:block;position:fixed;top:${rect.bottom+2}px;left:${rect.left}px;width:${Math.max(rect.width,200)}px;background:#1a1a1a;border:1px solid #f97316;border-radius:8px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.9)`;
-    drop.innerHTML=matches.map(m=>`<div onclick="pickCity('${stateId}','${m.nome.replace(/'/g,'&#39;')}','${m.uf}')"
+    drop.style.top=(rect.bottom)+'px';
+    drop.style.left=rect.left+'px';
+    drop.style.width=Math.max(rect.width,220)+'px';
+    drop.style.display='block';
+    drop.innerHTML=matches.map(([nome,uf])=>`<div onclick="pickCity2('${stateId}','${nome.replace(/'/g,"&#39;")}','${uf}')"
       style="padding:10px 14px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,.06)"
       onmouseover="this.style.background='rgba(249,115,22,.2)'" onmouseout="this.style.background='transparent'">
-      <span style="color:#f0f0f0">${m.nome}</span>
-      <span style="color:#f97316;font-weight:700;font-size:11px;background:rgba(249,115,22,.15);padding:2px 7px;border-radius:4px">${m.uf}</span>
+      <span style="color:#f0f0f0">${nome}</span>
+      <span style="color:#f97316;font-weight:700;font-size:11px;background:rgba(249,115,22,.15);padding:2px 7px;border-radius:4px">${uf}</span>
     </div>`).join('');
-  },180);
+  },150);
 }
-
-function pickCity(stateId, nome, uf){
+function createCityDrop(){
+  const d=document.createElement('div');
+  d.id='_cdrop2';
+  d.style.cssText='display:none;position:fixed;background:#1a1a1a;border:1px solid #f97316;border-radius:0 0 8px 8px;z-index:99999;max-height:280px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.9)';
+  document.body.appendChild(d);
+  document.addEventListener('mousedown',e=>{if(!d.contains(e.target))d.style.display='none';});
+  return d;
+}
+function pickCity2(stateId,nome,uf){
   const isDelivery=stateId==='order-del-state';
-  const inputId=isDelivery?'order-del-city':'order-city';
-  const el=document.getElementById(inputId);
+  const el=document.getElementById(isDelivery?'order-del-city':'order-city');
   if(el)el.value=nome;
   const ufEl=document.getElementById(stateId);
   if(ufEl)ufEl.value=uf;
   if(isDelivery){setOrderField('deliveryCity',nome);setOrderField('deliveryState',uf);}
   else{setOrderField('city',nome);setOrderField('state',uf);}
-  getCityDrop().style.display='none';
+  const d=document.getElementById('_cdrop2');if(d)d.style.display='none';
 }
-
-function initCityAutocompletes(){loadMunicipios();}
-
+function initCityAutocompletes(){}
 // ============ DRE ============
 let dreMes=new Date().getMonth(), dreAno=new Date().getFullYear();
 let dreExtras={outrosR:'',mktg:'',aluguel:'',folha:'',fixas:'',outros:'',impostos:''};
