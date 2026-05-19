@@ -532,7 +532,7 @@ function renderDashboard(){
     const rev=co.reduce((a,o)=>a+calcM(o).rev,0);
     return {...c,count:co.length,rev};
   }).filter(c=>c.count>0).sort((a,b)=>b.rev-a.rev);
-  const ads=Number(state.config.gastoAnuncios||0);
+  const ads=state.config.adsData&&Number(state.config.adsData.month||0)>0?Number(state.config.adsData.month):Number(state.config.gastoAnuncios||0);
   const roas=ads>0?(totalRev/ads).toFixed(1):0;
   const igF=Number(state.config.igFollowers||0);
   const igF7=Number(state.config.igF7||0);
@@ -602,10 +602,29 @@ function renderDashboard(){
     <div class="card"><div class="ct">Top 15 Cidades</div><div style="margin-top:10px">${citiesHTML}</div></div>
     <div style="display:flex;flex-direction:column;gap:14px">
       <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="ct">Gastos com Anuncios</div><div class="ads-pill"><div class="ads-dot"></div>Meta Ads</div></div>
-        <div class="ip" style="margin-bottom:6px"><span class="ips">R$</span><input type="number" value="${state.config.gastoAnuncios||''}" oninput="updateConfig('gastoAnuncios',this.value)" placeholder="0,00" style="font-size:16px;font-weight:700"></div>
-        <div style="font-size:10px;color:var(--txd);margin-bottom:6px">Atualizado manualmente</div>
-        <div class="roas-row"><span style="font-size:12px;color:var(--txm)">ROAS — Retorno sobre anuncios</span><span style="font-size:14px;font-weight:700;color:${Number(roas)>=2?'var(--gr)':Number(roas)>=1?'var(--or)':'var(--rd)'}">${ads>0?roas+'x':'—'}</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="ct">Gastos com Anúncios</div><div class="ads-pill"><div class="ads-dot"></div>Meta Ads</div></div>
+        ${state.config.metaToken&&state.config.adsData?`
+          <div style="font-size:26px;font-weight:800;color:var(--or);margin:6px 0">${fmtBRL(Number(state.config.adsData.month||0))}</div>
+          <div style="font-size:10px;color:var(--txd);margin-bottom:4px">Este mês · Hoje: ${fmtBRL(Number(state.config.adsData.today||0))}</div>
+          <div style="font-size:10px;color:var(--gr);margin-bottom:8px">✅ Automático via Meta Ads API</div>
+        `:`
+          <div class="ip" style="margin-bottom:6px"><span class="ips">R$</span><input type="number" value="${state.config.gastoAnuncios||''}" oninput="updateConfig('gastoAnuncios',this.value)" placeholder="0,00" style="font-size:16px;font-weight:700"></div>
+          <div style="font-size:10px;color:var(--txd);margin-bottom:6px">Manual — conecte o Meta Ads em Métricas para automático</div>
+        `}
+        <div class="roas-row">
+          <span style="font-size:12px;color:var(--txm)">ROAS — Retorno sobre anúncios</span>
+          <span style="font-size:14px;font-weight:700;color:${Number(roas)>=2?'var(--gr)':Number(roas)>=1?'var(--or)':'var(--rd)'}">${ads>0?roas+'x':'—'}</span>
+        </div>
+        ${ads>0?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
+          <div style="background:var(--sf3);border-radius:6px;padding:7px 10px;text-align:center">
+            <div style="font-size:9px;color:var(--txd);margin-bottom:2px">CPL mês</div>
+            <div style="font-size:13px;font-weight:700;color:var(--bl)">${state.config.adsData&&state.config.adsData.cplMes>0?fmtBRL(state.config.adsData.cplMes):'—'}</div>
+          </div>
+          <div style="background:var(--sf3);border-radius:6px;padding:7px 10px;text-align:center">
+            <div style="font-size:9px;color:var(--txd);margin-bottom:2px">Leads mês</div>
+            <div style="font-size:13px;font-weight:700;color:var(--bl)">${state.config.adsData&&state.config.adsData.leadsMes>0?state.config.adsData.leadsMes:'—'}</div>
+          </div>
+        </div>`:''}
       </div>
       <div class="card">
         <div class="ig-top"></div>
@@ -623,21 +642,23 @@ function renderDashboard(){
           <input type="date" value="${window._igCustomDate}" onchange="window._igPeriod='custom';window._igCustomDate=this.value;render()" style="padding:2px 6px;border-radius:20px;font-size:11px;border:1px solid ${window._igPeriod==='custom'?'var(--or)':'var(--bd)'};background:${window._igPeriod==='custom'?'var(--ordim)':'transparent'};color:var(--tx);cursor:pointer">
         </div>
 
-        <!-- Resultado do período -->
+        <!-- Resultado do período selecionado -->
         <div style="background:var(--sf3);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid ${igPeriodDelta>0?'rgba(34,197,94,.3)':igPeriodDelta<0?'rgba(239,68,68,.2)':'var(--bd)'}">
           <div style="font-size:10px;color:var(--txd);margin-bottom:4px">Novos seguidores — ${igPeriodLabel}</div>
-          <div style="font-size:22px;font-weight:700;color:${igPeriodDelta>0?'var(--gr)':igPeriodDelta<0?'var(--rd)':'var(--txm)'}">
+          <div style="font-size:24px;font-weight:800;color:${igPeriodDelta>0?'var(--gr)':igPeriodDelta<0?'var(--rd)':'var(--txm)'}">
             ${igPeriodDelta>0?'+':''}${igPeriodDelta}
-            ${fbd.length===0?`<span style="font-size:10px;color:var(--txd);font-weight:400"> — sincronize para ver</span>`:''}
+            ${fbd.length===0?`<span style="font-size:10px;color:var(--txd);font-weight:400"> — clique em Sincronizar</span>`:''}
           </div>
           ${igCustoSeg?`<div style="font-size:11px;color:var(--txd);margin-top:4px">💰 Custo por seguidor: <strong style="color:var(--or)">R$ ${igCustoSeg}</strong></div>`:''}
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px">
-          <div class="field"><label>Total</label><input type="number" value="${state.config.igFollowers||''}" oninput="updateConfig('igFollowers',Number(this.value))" placeholder="43000"></div>
-          <div class="field"><label>+Hoje</label><input type="number" value="${state.config.igF1||''}" oninput="updateConfig('igF1',Number(this.value))" placeholder="0"></div>
-          <div class="field"><label>+7d</label><input type="number" value="${state.config.igF7||''}" oninput="updateConfig('igF7',Number(this.value))" placeholder="0"></div>
-          <div class="field"><label>+30d</label><input type="number" value="${state.config.igF30||''}" oninput="updateConfig('igF30',Number(this.value))" placeholder="0"></div>
+        <!-- Resumo rápido dos 4 períodos -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+          ${[['Hoje',igDelta(todayStr)],['Ontem',igDelta(yesterdayStr)],['7 dias',igDeltaRange(7)],['30 dias',igDeltaRange(30)]].map(([l,v])=>`
+            <div style="background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center">
+              <div style="font-size:9px;color:var(--txd);margin-bottom:3px">${l}</div>
+              <div style="font-size:14px;font-weight:700;color:${v>0?'var(--gr)':v<0?'var(--rd)':'var(--txm)'}">${v>0?'+':''}${v}</div>
+            </div>`).join('')}
         </div>
       </div>
       <div class="card">
@@ -2908,16 +2929,31 @@ function renderMetricas(){
   </div>
 
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:10px">
       <div>
         <div class="ct">Meta Ads — Integracao Automatica</div>
         <div style="font-size:11px;color:var(--txd)">Ultimo sync: ${lastSync}</div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         ${state.config.adsLastSync?`<span style="font-size:11px;color:var(--txd)">Atualizado: ${state.config.adsLastSync}</span>`:''}
         <button class="btn bg2 sm" onclick="openAdsConfig()">⚙️ Configurar</button>
         <button class="btn bp sm" onclick="syncMetaAds()">🔄 Sincronizar Agora</button>
       </div>
+    </div>
+    <!-- Filtro de período -->
+    <div style="display:flex;gap:5px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+      ${[['hoje','Hoje'],['ontem','Ontem'],['7d','7 dias'],['30d','30 dias'],['mes','Este mês'],['custom','📅 Personalizado']].map(([k,l])=>`
+        <button onclick="window._adsPer='${k}';${k!=='custom'?'syncMetaAds()':'document.getElementById(\'ads-custom-dates\').style.display=\'flex\''}" 
+          style="padding:4px 12px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid ${(window._adsPer||'hoje')===k?'var(--or)':'var(--bd)'};background:${(window._adsPer||'hoje')===k?'var(--or)':'transparent'};color:${(window._adsPer||'hoje')===k?'#fff':'var(--txm)'}">
+          ${l}
+        </button>`).join('')}
+      <div id="ads-custom-dates" style="display:${(window._adsPer||'hoje')==='custom'?'flex':'none'};gap:6px;align-items:center">
+        <input type="date" id="ads-since" value="${window._adsSince||new Date().toISOString().slice(0,10)}" onchange="window._adsSince=this.value" style="font-size:11px;padding:3px 7px;border-radius:6px;border:1px solid var(--bd);background:var(--sf3);color:var(--tx)">
+        <span style="color:var(--txd);font-size:11px">até</span>
+        <input type="date" id="ads-until" value="${window._adsUntil||new Date().toISOString().slice(0,10)}" onchange="window._adsUntil=this.value" style="font-size:11px;padding:3px 7px;border-radius:6px;border:1px solid var(--bd);background:var(--sf3);color:var(--tx)">
+        <button class="btn bp sm" onclick="syncMetaAds()">Buscar</button>
+      </div>
+    </div>
     </div>
     ${state.config.metaToken&&state.config.metaAdAccount?`
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px">
@@ -3080,16 +3116,33 @@ async function syncMetaAds(){
   setSyncStatus('syncing');
   showToast('⏳ Sincronizando Meta Ads...','or');
   try{
-    const today=new Date().toISOString().slice(0,10);
-    const firstDay=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
-    const fields='spend,impressions,clicks,reach,cpm,cpc,actions,action_values,cost_per_action_type';
+    if(!window._adsPer)window._adsPer='hoje';
+  const per=window._adsPer;
+  const todayD=new Date().toISOString().slice(0,10);
+  const yesterdayD=new Date(Date.now()-86400000).toISOString().slice(0,10);
+  const since7=new Date(Date.now()-6*86400000).toISOString().slice(0,10);
+  const since30=new Date(Date.now()-29*86400000).toISOString().slice(0,10);
+  const firstDayD=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
+  let sinceD,untilD;
+  if(per==='hoje'){sinceD=todayD;untilD=todayD;}
+  else if(per==='ontem'){sinceD=yesterdayD;untilD=yesterdayD;}
+  else if(per==='7d'){sinceD=since7;untilD=todayD;}
+  else if(per==='30d'){sinceD=since30;untilD=todayD;}
+  else if(per==='mes'){sinceD=firstDayD;untilD=todayD;}
+  else{sinceD=window._adsSince||todayD;untilD=window._adsUntil||todayD;}
 
-    // Gasto hoje, mês e por campanha
-    const urlHoje=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range={"since":"${today}","until":"${today}"}&access_token=${token}`;
-    const urlMes=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range={"since":"${firstDay}","until":"${today}"}&access_token=${token}`;
-    const urlCamp=`https://graph.facebook.com/v19.0/${account}/campaigns?fields=name,status,insights.date_preset(today){spend,impressions,clicks,reach,actions,action_values,cost_per_action_type,cpm,ctr,frequency}&limit=30&access_token=${token}`;
-    const urlAdsets=`https://graph.facebook.com/v19.0/${account}/adsets?fields=name,status,campaign_id,insights.date_preset(today){spend,impressions,clicks,reach,actions,cost_per_action_type,cpm,ctr,frequency}&limit=50&access_token=${token}`;
-    const urlAds=`https://graph.facebook.com/v19.0/${account}/ads?fields=name,status,adset_id,campaign_id,creative{name,thumbnail_url},insights.date_preset(today){spend,impressions,clicks,reach,actions,cost_per_action_type,cpm,ctr,frequency}&limit=100&access_token=${token}`;
+  const trStr=`{"since":"${sinceD}","until":"${untilD}"}`;
+  const trParam=encodeURIComponent(trStr);
+
+  const fields='spend,impressions,clicks,reach,cpm,cpc,actions,action_values,cost_per_action_type';
+  const urlHoje=`https://graph.facebook.com/v19.0/${account}/insights?fields=${fields}&time_range=${trParam}&access_token=${token}`;
+  const urlMes=urlHoje; // mesmo período para ambos agora
+  const campFields=`name,status,insights.time_range(${trStr}){spend,impressions,clicks,reach,actions,action_values,cost_per_action_type,cpm,ctr,frequency}`;
+  const adsetFields=`name,status,campaign_id,insights.time_range(${trStr}){spend,impressions,clicks,reach,actions,cost_per_action_type,cpm,ctr,frequency}`;
+  const adFields=`name,status,adset_id,campaign_id,creative{name,thumbnail_url},insights.time_range(${trStr}){spend,impressions,clicks,reach,actions,cost_per_action_type,cpm,ctr,frequency}`;
+  const urlCamp=`https://graph.facebook.com/v19.0/${account}/campaigns?fields=${campFields}&limit=30&access_token=${token}`;
+  const urlAdsets=`https://graph.facebook.com/v19.0/${account}/adsets?fields=${adsetFields}&limit=50&access_token=${token}`;
+  const urlAds=`https://graph.facebook.com/v19.0/${account}/ads?fields=${adFields}&limit=100&access_token=${token}`;
 
     const [rHoje,rMes,rCamp,rAdsets,rAds]=await Promise.all([
       fetch(urlHoje).then(r=>r.json()),
