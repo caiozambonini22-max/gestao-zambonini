@@ -707,7 +707,10 @@ function renderItemsList(o){
     const valorLbl=item.isGift?'Valor (0=gratis)':'Valor';
 
     html+='<div data-item-idx="'+idx+'" style="display:grid;grid-template-columns:'+cols+';gap:7px;align-items:end;padding:10px;background:'+bg+';border-radius:8px;border:1px solid '+border+';margin-bottom:7px">';
-    html+='<div class="field"><label>'+lbl+'</label><select onchange="setItemField('+idx+',\'productId\',this.value);setItemField('+idx+',\'variacaoId\',\'\');setItemField('+idx+',\'salePrice\',state.prods.find(p=>p.id===this.value)?state.prods.find(p=>p.id===this.value).salePrice:\'\');updateOrderSummary();document.getElementById(\'order-items-list\').innerHTML=renderItemsList(orderModalData)">'+allProdOpts+'</select></div>';
+    const ssOpts=[{v:'',l:'-- Selecione --'},...state.prods.map(p=>({v:p.id,l:p.name}))];
+    const onProdSelect=`setItemField(${idx},'productId',__VAL__);setItemField(${idx},'variacaoId','');const _sp=state.prods.find(p=>p.id===__VAL__);if(_sp)setItemField(${idx},'salePrice',_sp.salePrice);updateOrderSummary();document.getElementById('order-items-list').innerHTML=renderItemsList(orderModalData);`;
+
+    html+='<div class="field"><label>'+lbl+'</label>'+makeSearchSelect('item-prod-'+idx,item.productId,ssOpts,onProdSelect)+'</div>';
     if(hasVars){
       html+='<div class="field"><label>Variação</label><select onchange="setItemField('+idx+',\'variacaoId\',this.value)">'+varOpts+'</select></div>';
     }
@@ -722,9 +725,9 @@ function renderItemsList(o){
 function showOrderModal(){
   currentTab='order-form';
   const el=document.getElementById('main-content');
+  window._formScroll=window.scrollY||window.pageYOffset||0;
   if(el){el.innerHTML=renderOrderModal();}
-  // preserve scroll
-  setTimeout(()=>window.scrollTo(0,window._formScroll||0),0);
+  setTimeout(()=>{window.scrollTo(0,window._formScroll||0);initCityAutocompletes();},0);
 }
 
 function renderOrderModal(){
@@ -753,8 +756,8 @@ function renderOrderModal(){
   let dlvOptions='';DLV.forEach(d=>{dlvOptions+=`<option value="${d.id}" ${o.deliveryMethod===d.id?'selected':''}>${d.icon} ${d.label}</option>`;});
   let upsellRows='';
   (o.upsells||[]).forEach(u=>{const up=state.prods.find(p=>p.id===u.productId);const nm=u.productId==='_c'?(u.customName||'Extra'):(up?up.name:'Extra');upsellRows+=`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;background:var(--sf2);border-radius:5px;margin-top:4px"><span>${esc(nm)}</span><span style="color:var(--gr)">${fmtBRL(u.price)}</span></div>`;});
-  let upsellProds=`<option value="">Produto...</option><option value="_c">Digitar...</option>`;
-  state.prods.forEach(p=>{upsellProds+=`<option value="${p.id}">${esc(p.name)}</option>`;});
+  const usSSOpts=[{v:'',l:'Produto...'},{v:'_c',l:'✏️ Digitar produto...'},...state.prods.map(p=>({v:p.id,l:p.name}))];
+  const usOnSelect=`ufProdChange(__VAL__);`;
   let paysHTML='';
   (o.payments||[]).forEach((pay,idx)=>{
     const m=state.maqs.find(x=>x.id===pay.maquininhaId);const md=pay.mode||'presencial';const inst=Number(pay.installments||1);
@@ -827,8 +830,8 @@ function renderOrderModal(){
             <div class="field"><label>Rua / Endereço de Cobrança</label><input value="${esc(o.street||'')}" oninput="setOrderField('street',this.value)"></div>
             <div class="field"><label>Número</label><input value="${esc(o.streetNum||'')}" oninput="setOrderField('streetNum',this.value)"></div>
             <div class="field"><label>Complemento</label><input value="${esc(o.complement||'')}" oninput="setOrderField('complement',this.value)"></div>
-            <div class="field"><label>Cidade</label><input value="${esc(o.city)}" oninput="setOrderField('city',this.value)"></div>
-            <div class="field"><label>UF</label><input value="${esc(o.state)}" oninput="setOrderField('state',this.value.toUpperCase().slice(0,2))" maxlength="2"></div>
+            <div class="field"><label>Cidade</label><input id="order-city" value="${esc(o.city)}" oninput="setOrderField('city',this.value)"></div>
+            <div class="field"><label>UF</label><input id="order-state" value="${esc(o.state)}" oninput="setOrderField('state',this.value)" maxlength="2" style="text-transform:uppercase"></div>
             <div class="field"><label>CEP</label>
               <div style="display:flex;gap:5px;align-items:center">
                 <input id="order-cep" value="${esc(o.cep||'')}" oninput="setOrderField('cep',this.value)" placeholder="00000-000" style="flex:1">
@@ -847,7 +850,7 @@ function renderOrderModal(){
               <div class="field"><label>Rua</label><input value="${esc(o.deliveryStreet||'')}" oninput="setOrderField('deliveryStreet',this.value)"></div>
               <div class="field"><label>Número</label><input value="${esc(o.deliveryStreetNum||'')}" oninput="setOrderField('deliveryStreetNum',this.value)"></div>
               <div class="field"><label>Complemento</label><input value="${esc(o.deliveryComplement||'')}" oninput="setOrderField('deliveryComplement',this.value)"></div>
-              <div class="field"><label>Cidade</label><input value="${esc(o.deliveryCity||'')}" oninput="setOrderField('deliveryCity',this.value)"></div>
+              <div class="field"><label>Cidade</label><input id="order-del-city" value="${esc(o.deliveryCity||'')}" oninput="setOrderField('deliveryCity',this.value)"></div>
               <div class="field"><label>UF</label><input value="${esc(o.deliveryState||'')}" oninput="setOrderField('deliveryState',this.value.toUpperCase().slice(0,2))" maxlength="2"></div>
               <div class="field"><label>CEP</label>
                 <div style="display:flex;gap:5px;align-items:center">
@@ -872,7 +875,7 @@ function renderOrderModal(){
               <div style="font-size:10px;color:var(--txd)">Produto extra que o cliente decidiu comprar além do pedido combinado</div>
             </div>
             <div style="display:flex;gap:7px;align-items:flex-end">
-              <div class="field" style="flex:1"><select id="uf-prod" onchange="ufProdChange(this.value)">${upsellProds}</select></div>
+              <div class="field" style="flex:1">${makeSearchSelect('uf-prod','',usSSOpts,usOnSelect)}</div>
               <div class="field" id="uf-custom-wrap" style="display:none;flex:1"><input id="uf-custom" placeholder="Descricao..."></div>
               <div class="field" style="width:100px"><div class="ip"><span class="ips">R$</span><input type="number" id="uf-price" placeholder="0,00"></div></div>
               <button class="btn bp sm" onclick="addUpsell()">+Add</button>
@@ -1123,9 +1126,10 @@ function toggleItemGift(idx){
   if(orderModalData.items[idx].isGift)orderModalData.items[idx].salePrice='0';
   refreshItemsList();
 }
-function ufProdChange(v){const w=document.getElementById('uf-custom-wrap');if(w)w.style.display=v==='_c'?'':'none';}
+window._ufProdVal='';
+function ufProdChange(v){window._ufProdVal=v;const w=document.getElementById('uf-custom-wrap');if(w)w.style.display=v==='_c'?'':'none';}
 function addUpsell(){
-  const pid=document.getElementById('uf-prod').value;const price=document.getElementById('uf-price').value;if(!price)return;
+  const pid=window._ufProdVal||'';const price=document.getElementById('uf-price').value;if(!price)return;
   const cn=document.getElementById('uf-custom');const customName=cn?cn.value:'';
   if(!orderModalData.upsells)orderModalData.upsells=[];
   orderModalData.upsells.push({id:uid(),productId:pid,price,customName});
@@ -2550,6 +2554,110 @@ function gerarComprovanteImagem(id){
   // Download
   const link=document.createElement('a');link.download=`comprovante-${o.orderNum||o.id||'pedido'}.png`;link.href=canvas.toDataURL('image/png');link.click();
   showToast('✅ Imagem gerada!','gr');
+}
+
+// ============ SEARCHABLE SELECT ============
+window._ssData={};
+function makeSearchSelect(id,selectedId,options,onSelectCode){
+  window._ssData[id]={options,onSelectCode};
+  const sel=options.find(o=>o.v===selectedId);
+  const lbl=sel?sel.l:'';
+  return `<div style="position:relative">
+    <input id="ss-${id}" value="${esc(lbl)}" placeholder="Buscar produto..." autocomplete="off"
+      onfocus="openSS('${id}')" oninput="filterSS('${id}',this.value)"
+      onblur="setTimeout(()=>closeSS('${id}'),220)"
+      style="width:100%;padding-right:28px">
+    <span style="position:absolute;right:8px;top:50%;transform:translateY(-50%);color:var(--txd);font-size:12px;pointer-events:none">▾</span>
+    <div id="ss-drop-${id}" style="display:none;position:absolute;top:100%;left:0;right:0;background:#1c1c1c;border:1px solid rgba(249,115,22,.4);border-top:none;border-radius:0 0 8px 8px;z-index:1000;max-height:240px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.6)"></div>
+  </div>`;
+}
+function openSS(id){filterSS(id,document.getElementById('ss-'+id)?.value||'');}
+function closeSS(id){const d=document.getElementById('ss-drop-'+id);if(d)d.style.display='none';}
+function filterSS(id,q){
+  const data=window._ssData[id];if(!data)return;
+  const drop=document.getElementById('ss-drop-'+id);if(!drop)return;
+  const q2=(q||'').toLowerCase();
+  const filtered=data.options.filter(o=>!q2||o.l.toLowerCase().includes(q2)).slice(0,20);
+  drop.innerHTML=filtered.map(o=>`<div
+    onmousedown="event.preventDefault();selectSS('${id}','${o.v.replace(/'/g,"\\'")}','${o.l.replace(/'/g,"\\'").replace(/"/g,"&quot;")}');(function(){const __VAL__='${o.v.replace(/'/g,"\\'")}';${data.onSelectCode}})();"
+    style="padding:8px 12px;cursor:pointer;font-size:12px;color:#f0f0f0;border-bottom:1px solid rgba(255,255,255,.04)"
+    onmouseover="this.style.background='rgba(249,115,22,.15)'"
+    onmouseout="this.style.background='transparent'">
+    ${esc(o.l)}
+  </div>`).join('');
+  drop.style.display=filtered.length?'block':'none';
+}
+function selectSS(id,val,lbl){
+  const input=document.getElementById('ss-'+id);
+  if(input){input.value=lbl;}
+  closeSS(id);
+}
+
+// ============ AUTOCOMPLETE CIDADE ============
+window._municipios=null;
+async function loadMunicipios(){
+  if(window._municipios)return window._municipios;
+  try{
+    const r=await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome');
+    const data=await r.json();
+    window._municipios=data.map(m=>({nome:m.nome,uf:m.microrregiao.mesorregiao.UF.sigla}));
+  }catch{window._municipios=[];}
+  return window._municipios;
+}
+
+function setupCityAutocomplete(inputId,cityField,stateField){
+  const input=document.getElementById(inputId);
+  if(!input||input._acSetup)return;
+  input._acSetup=true;
+
+  // Dropdown container
+  const wrap=input.parentElement;
+  wrap.style.position='relative';
+  const drop=document.createElement('div');
+  drop.style.cssText='display:none;position:absolute;top:100%;left:0;right:0;background:#1c1c1c;border:1px solid rgba(249,115,22,.4);border-top:none;border-radius:0 0 8px 8px;z-index:999;max-height:200px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)';
+  wrap.appendChild(drop);
+
+  let debounce;
+  input.addEventListener('input',async function(){
+    clearTimeout(debounce);
+    const q=this.value.trim();
+    if(q.length<2){drop.style.display='none';setOrderField(cityField,q);return;}
+    setOrderField(cityField,q);
+    debounce=setTimeout(async()=>{
+      const muns=await loadMunicipios();
+      const matches=muns.filter(m=>m.nome.toLowerCase().startsWith(q.toLowerCase())).slice(0,8);
+      if(!matches.length){drop.style.display='none';return;}
+      drop.innerHTML=matches.map(m=>`<div data-nome="${m.nome}" data-uf="${m.uf}" style="padding:8px 12px;cursor:pointer;font-size:12px;display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.05)" onmouseover="this.style.background='rgba(249,115,22,.15)'" onmouseout="this.style.background='transparent'">
+        <span style="color:#f0f0f0">${m.nome}</span>
+        <span style="color:#f97316;font-weight:700;font-size:11px">${m.uf}</span>
+      </div>`).join('');
+      drop.style.display='block';
+      drop.querySelectorAll('[data-nome]').forEach(item=>{
+        item.addEventListener('mousedown',function(e){
+          e.preventDefault();
+          const nome=this.dataset.nome;const uf=this.dataset.uf;
+          input.value=nome;
+          setOrderField(cityField,nome);
+          setOrderField(stateField,uf);
+          drop.style.display='none';
+          // Atualiza o campo UF na tela
+          const ufInput=document.getElementById(inputId.replace('city','state').replace('City','State'));
+          if(ufInput)ufInput.value=uf;
+        });
+      });
+    },200);
+  });
+
+  input.addEventListener('blur',()=>setTimeout(()=>{drop.style.display='none';},200));
+  input.addEventListener('focus',()=>{if(input.value.length>=2)input.dispatchEvent(new Event('input'));});
+}
+
+// Inicializa autocompletes após render do modal de pedido
+function initCityAutocompletes(){
+  setTimeout(()=>{
+    setupCityAutocomplete('order-city','city','state');
+    setupCityAutocomplete('order-del-city','deliveryCity','deliveryState');
+  },100);
 }
 
 // ============ DRE ============
