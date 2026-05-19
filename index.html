@@ -2084,6 +2084,7 @@ function renderProdutos(){
     <td><span class="badge b-or">${tipoLbl}</span></td>
     <td onclick="event.stopPropagation()"><div style="display:flex;gap:5px">
       <button class="btn bg2 sm" onclick="openProdModal('${p.id}')">Edit</button>
+      <button class="btn bg2 sm" onclick="duplicateProd('${p.id}')" title="Duplicar produto">⧉</button>
       <button class="btn bd2 sm" onclick="deleteProd('${p.id}')">×</button>
     </div></td></tr>`;
 
@@ -2128,6 +2129,16 @@ function renderProdutos(){
         <tbody>${rows}</tbody>
       </table></div>`}
   </div>`;
+}
+function duplicateProd(id){
+  const p=state.prods.find(x=>x.id===id);
+  if(!p)return;
+  const clone={...JSON.parse(JSON.stringify(p)),id:uid(),name:'Cópia de '+p.name,sku:''};
+  state.prods=[...state.prods,clone];
+  save('prods');
+  render();
+  // Abre direto para edição
+  setTimeout(()=>openProdModal(clone.id),100);
 }
 function deleteProd(id){if(confirm('Remover?')){state.prods=state.prods.filter(p=>p.id!==id);save('prods');render();}}
 // ============ PRODUCT MODAL STATE ============
