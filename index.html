@@ -3006,9 +3006,12 @@ function saveAdsConfig(){
 }
 
 async function syncMetaAds(){
-  const token=state.config.metaToken;const account=state.config.metaAdAccount;
+  const token=state.config.metaToken;let account=state.config.metaAdAccount;
   if(!token||!account){alert('Configure o token e Ad Account ID primeiro.');return;}
+  // Garante o prefixo act_
+  if(!account.startsWith('act_'))account='act_'+account;
   setSyncStatus('syncing');
+  showToast('⏳ Sincronizando Meta Ads...','or');
   try{
     const today=new Date().toISOString().slice(0,10);
     const firstDay=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
@@ -3071,7 +3074,7 @@ async function syncMetaAds(){
       campaigns,
       followersByDay
     };
-    state.config.adsLastSync=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+    state.config.adsLastSync=new Date().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     save('config');setSyncStatus('ok');render();
     showToast('✅ Meta Ads sincronizado!','gr');
   }catch(e){setSyncStatus('error');showToast('❌ Erro ao conectar com Meta Ads. Verifique o token.','rd');}
