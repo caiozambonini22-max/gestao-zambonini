@@ -232,7 +232,7 @@ function setSyncStatus(s){
   if(!dot||!txt)return;
   dot.className='sync-dot'+(s==='syncing'?' syncing':s==='error'?' error':'');
   if(s==='syncing') txt.textContent='Salvando...';
-  else if(s==='error') txt.textContent='⚠ Salvo local · Erro na nuvem';
+  else if(s==='error') txt.innerHTML='⚠ Salvo local · <span style="color:var(--rd)">Erro na nuvem</span> <button onclick="retrySyncAll()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:4px;color:var(--txm);cursor:pointer;font-size:10px;padding:1px 6px;margin-left:4px">↻ Tentar</button>';
   else txt.textContent='✓ Salvo';
 }
 
@@ -245,30 +245,59 @@ async function dbGet(key){
 }
 
 async function dbSet(key,value){
-  try{
-    const {error}=await sb.from('zambonini_data').upsert(
-      {key, value, updated_at:new Date().toISOString()},
-      {onConflict:'key'}
-    );
-    if(error){console.warn('Supabase save error:',error.message);setSyncStatus('error');}
-  }catch(e){setSyncStatus('error');}
+  // Limita dados grandes antes de salvar
+  let dataToSave=value;
+  if(key==='config'&&value&&value.adsData){
+    // Mantém só últimos 30 dias de followersByDay
+    dataToSave={...value,adsData:{...value.adsData,followersByDay:(value.adsData.followersByDay||[]).slice(-30)}};
+  }
+  // Tenta 2 vezes com intervalo (Supabase às vezes está dormindo)
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      const {error}=await sb.from('zambonini_data').upsert(
+        {key, value:dataToSave, updated_at:new Date().toISOString()},
+        {onConflict:'key'}
+      );
+      if(!error)return true;
+      console.warn('Supabase save error:',error.message,error.code);
+      if(attempt===0)await new Promise(r=>setTimeout(r,3000)); // aguarda 3s e tenta de novo
+    }catch(e){
+      if(attempt===0)await new Promise(r=>setTimeout(r,3000));
+    }
+  }
+  return false;
 }
 
+const _saveStatus={};
 function save(key){
-  // 1. Salva no localStorage IMEDIATAMENTE (nunca perde dados no F5)
+  // 1. Salva no localStorage IMEDIATAMENTE
   try{
     localStorage.setItem('zb_cache_'+key, JSON.stringify(state[key]));
     localStorage.setItem('zb_save_time', new Date().toISOString());
   }catch{}
 
-  // 2. Sincroniza com Supabase em background (com debounce)
+  // 2. Sincroniza com Supabase em background
   setSyncStatus('syncing');
   clearTimeout(saveTimers[key]);
   saveTimers[key]=setTimeout(async()=>{
-    await dbSet(key, state[key]);
-    const allOk=!document.querySelector('#sync-txt')?.textContent?.includes('Erro');
-    if(allOk) setSyncStatus('ok');
-  }, 600);
+    const ok=await dbSet(key, state[key]);
+    _saveStatus[key]=ok;
+    const anyFail=Object.values(_saveStatus).some(v=>v===false);
+    if(anyFail)setSyncStatus('error');
+    else setSyncStatus('ok');
+  }, 800);
+}
+
+async function retrySyncAll(){
+  setSyncStatus('syncing');
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+  let allOk=true;
+  for(const k of keys){
+    const ok=await dbSet(k,state[k]);
+    if(!ok)allOk=false;
+  }
+  setSyncStatus(allOk?'ok':'error');
+  if(allOk)showToast('✅ Sincronizado com a nuvem!','gr');
 }
 
 // ============ LOAD ============
