@@ -550,8 +550,10 @@ function renderDashboard(){
   if(!window._igPeriod)window._igPeriod='hoje';
   if(!window._igCustomDate)window._igCustomDate=new Date().toISOString().slice(0,10);
   const fbd=(state.config.adsData&&state.config.adsData.followersByDay)||[];
-  const todayStr=new Date().toISOString().slice(0,10);
-  const yesterdayStr=new Date(Date.now()-86400000).toISOString().slice(0,10);
+  // Datas no fuso local (Brasília UTC-3)
+  const _tzOff=new Date().getTimezoneOffset()*60000;
+  const todayStr=new Date(Date.now()-_tzOff).toISOString().slice(0,10);
+  const yesterdayStr=new Date(Date.now()-_tzOff-86400000).toISOString().slice(0,10);
   function igDelta(dateStr){const d=fbd.find(x=>x.date===dateStr);return d?Number(d.delta||0):0;}
   function igDeltaRange(n){return fbd.filter(x=>x.date>=new Date(Date.now()-n*86400000).toISOString().slice(0,10)&&x.date<=todayStr).reduce((a,x)=>a+Number(x.delta||0),0);}
   const igPeriodLabel={'hoje':'Hoje','ontem':'Ontem','7d':'7 dias','30d':'30 dias','custom':'Data'}[window._igPeriod]||'Hoje';
@@ -729,12 +731,33 @@ function renderPedidos(){
   });}
   return `
   <div class="sbar">${statusBtns}</div>
-  <div class="fbar">
-    <input placeholder="Buscar..." value="${esc(pedidoSearch)}" oninput="pedidoSearch=this.value;render()" style="flex:1;max-width:280px">
-    <input type="date" value="${pedidoDe}" onchange="pedidoDe=this.value;render()" style="width:138px">
-    <span style="color:var(--txd);font-size:11px">ate</span>
-    <input type="date" value="${pedidoAte}" onchange="pedidoAte=this.value;render()" style="width:138px">
-    ${pedidoSearch||pedidoDe||pedidoAte?`<button class="btn bg2 sm" onclick="pedidoSearch='';pedidoDe='';pedidoAte='';render()">×</button>`:''}
+  <div class="fbar" style="flex-wrap:wrap;gap:6px">
+    <input placeholder="Buscar..." value="${esc(pedidoSearch)}" oninput="pedidoSearch=this.value;render()" style="flex:1;min-width:160px;max-width:280px">
+    <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+      ${(()=>{
+        const _tz=new Date().getTimezoneOffset()*60000;
+        function _bd(n){return new Date(Date.now()-_tz+n*86400000).toISOString().slice(0,10);}
+        const today=_bd(0),yest=_bd(-1),w0=_bd(-6),m0=_bd(-29);
+        const mon=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
+        const wStart=(()=>{const d=new Date(Date.now()-_tz);d.setDate(d.getDate()-d.getDay());return d.toISOString().slice(0,10);})();
+        const f15=_bd(-14);
+        const presets=[
+          ['Hoje',today,today],['Ontem',yest,yest],
+          ['7 dias',w0,today],['15 dias',f15,today],
+          ['Semana',wStart,today],['Mês',mon,today]
+        ];
+        return presets.map(([l,de,ate])=>{
+          const active=pedidoDe===de&&pedidoAte===ate;
+          return `<button onclick="pedidoDe='${de}';pedidoAte='${ate}';render()" style="padding:3px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid ${active?'var(--or)':'var(--bd)'};background:${active?'var(--or)':'transparent'};color:${active?'#fff':'var(--txm)'}">${l}</button>`;
+        }).join('');
+      })()}
+    </div>
+    <div style="display:flex;gap:4px;align-items:center">
+      <input type="date" value="${pedidoDe}" onchange="pedidoDe=this.value;render()" style="width:130px">
+      <span style="color:var(--txd);font-size:11px">até</span>
+      <input type="date" value="${pedidoAte}" onchange="pedidoAte=this.value;render()" style="width:130px">
+      ${pedidoSearch||pedidoDe||pedidoAte?`<button class="btn bg2 sm" onclick="pedidoSearch='';pedidoDe='';pedidoAte='';render()">×</button>`:''}
+    </div>
     <button class="btn bp" style="margin-left:auto" onclick="openNewOrder()">+ Novo Pedido</button>
   </div>
   <div class="card" style="padding:0;overflow:hidden">
@@ -3202,11 +3225,19 @@ async function syncMetaAds(){
   try{
     if(!window._adsPer)window._adsPer='hoje';
   const per=window._adsPer;
-  const todayD=new Date().toISOString().slice(0,10);
-  const yesterdayD=new Date(Date.now()-86400000).toISOString().slice(0,10);
-  const since7=new Date(Date.now()-6*86400000).toISOString().slice(0,10);
-  const since30=new Date(Date.now()-29*86400000).toISOString().slice(0,10);
+
+  // Datas no fuso de Brasília (UTC-3) — evita virar dia antes da hora
+  function brDate(offsetDays){
+    const d=new Date(Date.now()-new Date().getTimezoneOffset()*60000);
+    if(offsetDays)d.setDate(d.getDate()+offsetDays);
+    return d.toISOString().slice(0,10);
+  }
+  const todayD=brDate(0);
+  const yesterdayD=brDate(-1);
+  const since7=brDate(-6);
+  const since30=brDate(-29);
   const firstDayD=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
+
   let sinceD,untilD;
   if(per==='hoje'){sinceD=todayD;untilD=todayD;}
   else if(per==='ontem'){sinceD=yesterdayD;untilD=yesterdayD;}
@@ -3287,14 +3318,16 @@ async function syncMetaAds(){
         if(rIg.followers_count){igFollowers=rIg.followers_count;state.config.igFollowers=igFollowers;}
 
         // Busca variação diária dos últimos 30 dias
-        const since30=Math.floor((Date.now()-30*86400000)/1000);
-        const until=Math.floor(Date.now()/1000);
-        const rInsights=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}/insights?metric=follower_count&period=day&since=${since30}&until=${until}&access_token=${token}`).then(r=>r.json());
+        const since30ts=Math.floor((Date.now()-30*86400000)/1000);
+        const untilts=Math.floor(Date.now()/1000);
+        const rInsights=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}/insights?metric=follower_count&period=day&since=${since30ts}&until=${untilts}&access_token=${token}`).then(r=>r.json());
         if(rInsights.data&&rInsights.data[0]&&rInsights.data[0].values){
-          followersByDay=rInsights.data[0].values.map(v=>({
-            date:v.end_time?v.end_time.slice(0,10):new Date().toISOString().slice(0,10),
-            delta:v.value
-          }));
+          const tzOffset=new Date().getTimezoneOffset()*60000;
+          followersByDay=rInsights.data[0].values.map(v=>{
+            // Converte end_time para data local (Brasília UTC-3)
+            const endMs=v.end_time?new Date(v.end_time).getTime()-tzOffset:Date.now()-tzOffset;
+            return {date:new Date(endMs).toISOString().slice(0,10),delta:v.value};
+          });
         }
       }catch(e){console.warn('Instagram insights error:',e);}
     }
