@@ -212,14 +212,16 @@ function payFee(pay,maqs){
 }
 function getCost(prod,si){if(!prod)return 0;if(prod.costMode==='avg'&&si&&Number(si.avgCost)>0)return Number(si.avgCost);return Number(prod.costPrice||0);}
 function calcM(order){
-  const prod=state.prods.find(p=>p.id===order.productId);
-  const si=state.stock.find(s=>s.productId===order.productId);
-  const cp=getCost(prod,si);const sp=Number(order.salePrice||0);const qty=Number(order.quantity||1);
   const mot=Number(order.motoboyCost||0);const cor=Number(order.correiosCost||0);
   const fee=(order.payments||[]).reduce((a,p)=>a+payFee(p,state.maqs),0);
   const upsell=(order.upsells||[]).reduce((s,u)=>s+Number(u.price||0),0);
-  const rev=sp*qty+upsell-Number(order.discount||0);
-  const cost=cp*qty;const total=cost+mot+cor+fee;
+
+  // Soma todos os itens (inclui brindes no custo, exclui na receita)
+  const items=order.items&&order.items.length>0?order.items:[{productId:order.productId,quantity:order.quantity||1,salePrice:order.salePrice||0,isGift:false}];
+  const rev=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0)+upsell-Number(order.discount||0);
+  const cost=items.reduce((a,it)=>{const p=state.prods.find(x=>x.id===it.productId);const si=state.stock.find(s=>s.productId===it.productId);return a+getCost(p,si)*Number(it.quantity||1);},0);
+
+  const total=cost+mot+cor+fee;
   const profit=rev-total;const roi=total>0?(profit/total)*100:0;
   return{fee,rev,profit,roi,mot,cor,upsell,cost};
 }
@@ -954,8 +956,9 @@ function renderOrderModal(){
               <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--or)">Upsell</div>
               <div style="font-size:10px;color:var(--txd)">Produto extra que o cliente decidiu comprar além do pedido combinado</div>
             </div>
-            <div style="display:flex;gap:7px;align-items:flex-end">
-              <div class="field" style="flex:1">${makeSearchSelect('uf-prod','',usSSOpts,usOnSelect)}</div>
+            <div style="display:flex;gap:7px;align-items:flex-end;flex-wrap:wrap">
+              <div class="field" style="flex:2;min-width:200px">${makeSearchSelect('uf-prod','',usSSOpts,"window._ufProdVal=__VAL__;ufProdChange(__VAL__);")}</div>
+              <div class="field" id="uf-var-wrap" style="display:none;width:160px"><select id="uf-var" style="width:100%"><option value="">— Variação —</option></select></div>
               <div class="field" id="uf-custom-wrap" style="display:none;flex:1"><input id="uf-custom" placeholder="Descricao..."></div>
               <div class="field" style="width:100px"><div class="ip"><span class="ips">R$</span><input type="number" id="uf-price" placeholder="0,00"></div></div>
               <button class="btn bp sm" onclick="addUpsell()">+Add</button>
@@ -1206,18 +1209,56 @@ function toggleItemGift(idx){
   refreshItemsList();
 }
 window._ufProdVal='';
-function ufProdChange(v){window._ufProdVal=v;const w=document.getElementById('uf-custom-wrap');if(w)w.style.display=v==='_c'?'':'none';}
+window._ufVarVal='';
+function ufProdChange(v){
+  window._ufProdVal=v;
+  const w=document.getElementById('uf-custom-wrap');if(w)w.style.display=v==='_c'?'':'none';
+  const varWrap=document.getElementById('uf-var-wrap');
+  const varSel=document.getElementById('uf-var');
+  const priceEl=document.getElementById('uf-price');
+  if(!varWrap||!varSel)return;
+  const prod=state.prods.find(p=>p.id===v);
+  if(prod&&prod.tipo==='variacao'&&prod.variacoes&&prod.variacoes.length>0){
+    const stock=state.stock?state.stock.find(s=>s.productId===v):null;
+    const vars=stock&&stock.variations&&stock.variations.length>0?stock.variations:[];
+    let opts='<option value="">— Variação —</option>';
+    prod.variacoes.forEach(attr=>{
+      (attr.opcoes||[]).forEach(op=>{
+        const label=prod.variacoes.length>1?attr.nome+': '+op:op;
+        const vStock=vars.find(vv=>vv.name===label);
+        const qty=vStock?Number(vStock.quantity||0):0;
+        opts+=`<option value="${label}">${label} (${qty} un.)</option>`;
+      });
+    });
+    varSel.innerHTML=opts;
+    varWrap.style.display='';
+  } else {
+    varWrap.style.display='none';
+    varSel.innerHTML='';
+  }
+  // Auto-fill price
+  if(prod&&prod.salePrice&&priceEl&&!priceEl.value){priceEl.value=prod.salePrice;}
+}
 function addUpsell(){
   const pid=window._ufProdVal||'';const price=document.getElementById('uf-price').value;if(!price)return;
   const cn=document.getElementById('uf-custom');const customName=cn?cn.value:'';
+  const varSel=document.getElementById('uf-var');const varVal=varSel?varSel.value:'';
   if(!orderModalData.upsells)orderModalData.upsells=[];
-  orderModalData.upsells.push({id:uid(),productId:pid,price,customName});
-  const up=state.prods.find(p=>p.id===pid);const nm=pid==='_c'?(customName||'Extra'):(up?up.name:'Extra');
-  const list=document.getElementById('upsell-list');
-  if(list){const div=document.createElement('div');div.style.cssText='display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;background:var(--sf2);border-radius:5px;margin-top:4px';div.innerHTML='<span>'+esc(nm)+'</span><div style="display:flex;gap:8px"><span style="color:var(--gr)">'+fmtBRL(price)+'</span></div>';list.appendChild(div);}
-  document.getElementById('uf-price').value='';if(cn)cn.value='';
+  const prod=state.prods.find(p=>p.id===pid);
+  const displayName=pid==='_c'?customName:(prod?(prod.name+(varVal?' — '+varVal:'')):customName);
+  orderModalData.upsells.push({id:uid(),productId:pid,variacaoName:varVal,price,customName:displayName});
   updateOrderSummary();
+  const ul=document.getElementById('upsell-list');
+  if(ul)ul.innerHTML=(orderModalData.upsells||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;background:var(--sf2);border-radius:5px;margin-top:4px"><span>${esc(u.customName||u.productId)}</span><span style="color:var(--gr)">${fmtBRL(u.price)}</span></div>`).join('');
+  const priceEl=document.getElementById('uf-price');if(priceEl)priceEl.value='';
+  if(cn)cn.value='';
+  const varWrap=document.getElementById('uf-var-wrap');if(varWrap)varWrap.style.display='none';
+  if(varSel)varSel.innerHTML='';
+  window._ufProdVal='';
+  // Reset search select
+  const inp=document.getElementById('ss-uf-prod');if(inp)inp.value='';
 }
+  if(!orderModalData.upsells)orderModalData.upsells=[];
 function removeUpsell(id){if(!orderModalData)return;orderModalData.upsells=(orderModalData.upsells||[]).filter(u=>u.id!==id);showOrderModal();}
 function changePayType(idx,type){if(!orderModalData)return;const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments[idx]=Object.assign({},orderModalData.payments[idx],{type,maquininhaId:fmq,mode:'presencial',installments:1});showOrderModal();}
 function changePayField(idx,k,v){if(!orderModalData)return;orderModalData.payments[idx][k]=v;showOrderModal();}
@@ -1273,10 +1314,24 @@ function parseWA(){
   }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='Interpretar e Preencher';}alert('Erro ao interpretar. Tente novamente.');});
 }
 
+// Helper: calcula total real do pedido somando todos os itens
+function getOrderTotal(o){
+  if(!o)return 0;
+  const items=o.items&&o.items.length>0?o.items:null;
+  if(items){
+    const itemTotal=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0);
+    const upTotal=(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0);
+    return itemTotal+upTotal-Number(o.discount||0);
+  }
+  return Number(o.salePrice||0)*Number(o.quantity||1)+(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0)-Number(o.discount||0);
+}
+
 function saveOrder(){
   if(!orderModalData)return;
   const o=orderModalData;
   if(!o.items||!o.items[0]||!o.items[0].productId)return alert('Selecione pelo menos um produto.');
+  // Calcula e salva o total correto somando todos os itens
+  o.salePrice=getOrderTotal(o);
   if(o._isNew){
     if(!o.items||o.items.length===0)o.items=[{id:uid(),productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}];
     const saved={...o,id:uid(),orderNum:state.orderSeq,createdAt:new Date().toISOString()};
@@ -2514,7 +2569,7 @@ function copiarMotoboy(id){
   const o=getOrderById(id);if(!o)return;
   const pay=(o.payments&&o.payments[0])||{type:'pix'};
   const payLabel=pay.type==='pix'?'PIX ⚡':pay.type==='dinheiro'?'Dinheiro 💵':`Cartão 💳${pay.installments>1?' ('+pay.installments+'x)':''}`;
-  const pagStatus=o.statusPagamento==='pago'?'✅ JÁ PAGO':o.statusPagamento==='entrega'?'💵 COBRAR NA ENTREGA — '+fmtBRL(o.salePrice||0):'⏳ PENDENTE';
+  const pagStatus=o.statusPagamento==='pago'?'✅ JÁ PAGO':o.statusPagamento==='entrega'?'💵 COBRAR NA ENTREGA — '+fmtBRL(getOrderTotal(o)):'⏳ PENDENTE';
   const addr=o.diffDeliveryAddr&&o.deliveryStreet
     ?(o.deliveryStreet||'')+(o.deliveryStreetNum?', '+o.deliveryStreetNum:'')+(o.deliveryComplement?' — '+o.deliveryComplement:'')+'\n    '+(o.deliveryBairro||'')+' · '+(o.deliveryCity||'')+'/'+(o.deliveryState||'')+'\n    CEP: '+(o.deliveryCep||'—')
     :(o.street||'')+(o.streetNum?', '+o.streetNum:'')+(o.complement?' — '+o.complement:'')+'\n    '+(o.bairro||'')+' · '+(o.city||'')+'/'+(o.state||'')+'\n    CEP: '+(o.cep||'—');
@@ -2526,7 +2581,7 @@ function copiarMotoboy(id){
 ━━━━━━━━━━━━━━━━━━━━
 📍 ${addr}
 ━━━━━━━━━━━━━━━━━━━━
-💰 ${fmtBRL(o.salePrice||0)} — ${payLabel}
+💰 ${fmtBRL(getOrderTotal(o))} — ${payLabel}
 ${pagStatus}${o.deliveryUntil?'\n🕐 Entregar até: '+o.deliveryUntil:''}${o.numSacolas?'\n🛍 '+o.numSacolas+' sacola'+(o.numSacolas==='1'?'':'s'):''}`;
 
   navigator.clipboard.writeText(txt).then(()=>showToast('✅ Copiado para o motoboy!','gr')).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();showToast('✅ Copiado!','gr');});
@@ -2788,24 +2843,38 @@ function removeCity(id){state.deliveryCities=(state.deliveryCities||[]).filter(c
 function updateOrderSummary(){
   if(!orderModalData)return;
   const o=orderModalData;
-  // Soma todos os itens do pedido
   const items=o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}];
   const ut=(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0);
-  const st=items.reduce((a,it)=>{
-    if(it.isGift)return a;
-    return a+Number(it.salePrice||0)*Number(it.quantity||1);
-  },0);
+  // Receita: só itens pagos (não brindes)
+  const st=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0);
   const rev=st+ut-Number(o.discount||0);
-  const ctotal=items.reduce((a,it)=>{
+  // Custo: TODOS os itens incluindo brindes
+  const custoItens=items.map(it=>{
     const p=state.prods.find(x=>x.id===it.productId);
     const si=state.stock?state.stock.find(s=>s.productId===it.productId):null;
-    return a+getCost(p,si)*Number(it.quantity||1);
-  },0);
+    return getCost(p,si)*Number(it.quantity||1);
+  });
+  const ctotal=custoItens.reduce((a,c)=>a+c,0);
   const mot=Number(o.motoboyCost||0);const cor=Number(o.correiosCost||0);
   const fee=(o.payments||[]).reduce((a,p)=>a+payFee(p,state.maqs),0);
   const td=ctotal+mot+cor+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
   const s=document.getElementById('order-summary');
-  if(s){s.innerHTML='<div style="font-size:11px;line-height:1.9"><div>Receita: <strong style="color:var(--or)">'+fmtBRL(rev)+'</strong></div><div>Custo: <strong style="color:var(--rd)">'+fmtBRL(td)+'</strong></div><div>Lucro: <strong style="color:'+(profit>=0?'var(--gr)':'var(--rd)')+'">'+fmtBRL(profit)+'</strong></div><div>ROI: <strong style="color:'+(roi>=0?'var(--gr)':'var(--rd)')+'">'+fmtPct(roi)+'</strong></div></div>';}
+  if(!s)return;
+  // Mostra custo por item
+  const itemLines=items.map((it,i)=>{
+    const p=state.prods.find(x=>x.id===it.productId);
+    const c=custoItens[i];
+    if(!p)return'';
+    const lbl=it.isGift?`🎁 ${esc(p.name)}`:`📦 ${esc(p.name)}`;
+    return`<div style="font-size:10px;color:var(--txd);display:flex;justify-content:space-between"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px">${lbl}</span><span style="color:${c>0?'var(--rd)':'#555'};flex-shrink:0;margin-left:6px">${c>0?'−'+fmtBRL(c):'sem custo'}</span></div>`;
+  }).filter(Boolean).join('');
+  s.innerHTML=`<div style="font-size:11px;line-height:1.9">
+    ${itemLines?`<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bd)">${itemLines}</div>`:''}
+    <div>Receita: <strong style="color:var(--or)">${fmtBRL(rev)}</strong></div>
+    <div>Custo total: <strong style="color:var(--rd)">${fmtBRL(td)}</strong></div>
+    <div>Lucro: <strong style="color:${profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(profit)}</strong></div>
+    <div>ROI: <strong style="color:${roi>=0?'var(--gr)':'var(--rd)'}">${fmtPct(roi)}</strong></div>
+  </div>`;
 }
 // ============ BIND EVENTS ============
 function bindEvents(){}
