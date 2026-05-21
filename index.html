@@ -557,11 +557,24 @@ function renderDashboard(){
   const todayStr=localDate(0);
   const yesterdayStr=localDate(-1);
   function igDelta(dateStr){const d=fbd.find(x=>x.date===dateStr);return d?Number(d.delta||0):0;}
-  function igDeltaRange(n){return fbd.filter(x=>x.date>=new Date(Date.now()-n*86400000).toISOString().slice(0,10)&&x.date<=todayStr).reduce((a,x)=>a+Number(x.delta||0),0);}
+  function igDeltaRange(n){
+    // Usa diferença entre o mais recente e o registro de n dias atrás
+    const hist=state.config.igHistory||[];
+    if(hist.length<2)return 0;
+    const latest=hist[hist.length-1];
+    const cutoff=localDate(-n);
+    const old=hist.filter(x=>x.date<=cutoff).pop()||hist[0];
+    return latest.count-(old.count||latest.count);
+  }
   const igPeriodLabel={'hoje':'Hoje','ontem':'Ontem','7d':'7 dias','30d':'30 dias','custom':'Data'}[window._igPeriod]||'Hoje';
   const igPeriodDelta=window._igPeriod==='hoje'?igDelta(todayStr):window._igPeriod==='ontem'?igDelta(yesterdayStr):window._igPeriod==='7d'?igDeltaRange(7):window._igPeriod==='30d'?igDeltaRange(30):igDelta(window._igCustomDate);
   const igPeriodSpend=window._igPeriod==='hoje'?(state.config.adsData&&Number(state.config.adsData.today||0)):window._igPeriod==='30d'?(state.config.adsData&&Number(state.config.adsData.month||0)):0;
-  const igCustoSeg=igPeriodDelta>0&&igPeriodSpend>0?(igPeriodSpend/igPeriodDelta).toFixed(2):null;
+  // Custo por seguidor: usa dados do Meta Ads se disponível, senão calcula pelo histórico
+  const adFollowsMes=state.config.adsData&&Number(state.config.adsData.followsMes||0);
+  const adCpfMes=state.config.adsData&&Number(state.config.adsData.cpfMes||0);
+  const igCustoSeg=window._igPeriod==='hoje'&&igPeriodDelta>0&&igPeriodSpend>0?(igPeriodSpend/igPeriodDelta).toFixed(2):
+    window._igPeriod==='30d'&&igPeriodDelta>0&&igPeriodSpend>0?(igPeriodSpend/igPeriodDelta).toFixed(2):
+    adCpfMes>0?adCpfMes.toFixed(2):null;
 
   let citiesHTML='';
   if(topCities.length===0){citiesHTML='<div class="empty"><div class="empty-ic">📍</div><p>Sem dados no periodo</p></div>';}
@@ -3086,7 +3099,7 @@ function renderMetricas(){
       if(!camps.length)return '<div style="padding:14px;font-size:11px;color:var(--txd);text-align:center">Clique em 🔄 Sincronizar para carregar campanhas</div>';
 
       const hdr=(cols)=>`<tr style="background:var(--sf2)">${cols.map(c=>`<th style="text-align:${c.r?'right':'left'};padding:6px ${c.r?'14':'10'}px;font-size:9px;color:var(--txd);font-weight:700;text-transform:uppercase;white-space:nowrap">${c.l}</th>`).join('')}</tr>`;
-      const cols=[{l:'Nome'},{l:'Status'},{l:'Gasto',r:1},{l:'Impr.',r:1},{l:'Cliques',r:1},{l:'CTR',r:1},{l:'CPM',r:1},{l:'Freq.',r:1},{l:'Leads',r:1},{l:'CPL',r:1},{l:'Vendas',r:1}];
+      const cols=[{l:'Nome'},{l:'Status'},{l:'Gasto',r:1},{l:'Impr.',r:1},{l:'Cliques',r:1},{l:'CTR',r:1},{l:'CPM',r:1},{l:'Freq.',r:1},{l:'Leads',r:1},{l:'CPL',r:1},{l:'Segs.',r:1},{l:'C/Seg',r:1},{l:'Vendas',r:1}];
 
       const cplColor=(v)=>v>0?(v<15?'var(--gr)':v<30?'#f59e0b':'var(--rd)'):'var(--txd)';
       const statusBadge=(s)=>`<span style="font-size:10px;padding:2px 6px;border-radius:10px;font-weight:700;background:${s==='ACTIVE'?'rgba(34,197,94,.15)':'rgba(100,100,100,.12)'};color:${s==='ACTIVE'?'var(--gr)':'var(--txd)'}">${s==='ACTIVE'?'Ativa':'Pausada'}</span>`;
@@ -3109,6 +3122,8 @@ function renderMetricas(){
           <td style="padding:9px 14px;text-align:right;color:var(--txm)">${c.freq>0?c.freq.toFixed(1):'—'}</td>
           <td style="padding:9px 14px;text-align:right;color:var(--bl);font-weight:700">${c.leads>0?c.leads:'—'}</td>
           <td style="padding:9px 14px;text-align:right;color:${cplColor(c.cpl)};font-weight:700">${c.cpl>0?fmtBRL(c.cpl):'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:#a78bfa;font-weight:700">${c.follows>0?c.follows:'—'}</td>
+          <td style="padding:9px 14px;text-align:right;color:${c.cpf>0&&c.cpf<5?'var(--gr)':c.cpf<15?'#f59e0b':'var(--rd)'};font-weight:700">${c.cpf>0?fmtBRL(c.cpf):'—'}</td>
           <td style="padding:9px 14px;text-align:right;color:var(--gr);font-weight:700">${c.vendas>0?c.vendas:'—'}</td>
         </tr>`;
 
@@ -3285,14 +3300,22 @@ async function syncMetaAds(){
     const valorVendasMes=getActionVal(dMes.action_values,'purchase')||getActionVal(dMes.action_values,'omni_purchase');
     const cplMes=Number(dMes.spend||0)>0&&leadsMes>0?(Number(dMes.spend)/leadsMes).toFixed(2):0;
     const cplHoje=getCPA(dHoje.cost_per_action_type,'onsite_conversion.messaging_conversation_started_7d')||getCPA(dHoje.cost_per_action_type,'lead');
+    // Seguidores via anúncio (instagram_profile_follow ou page_fan)
+    function getFollows(actions){return getAction(actions,'instagram_profile_follow')||getAction(actions,'page_fan')||getAction(actions,'follow');}
+    const followsHoje=getFollows(dHoje.actions);
+    const followsMes=getFollows(dMes.actions);
+    const cpfHoje=followsHoje>0&&Number(dHoje.spend||0)>0?(Number(dHoje.spend)/followsHoje).toFixed(2):0;
+    const cpfMes=followsMes>0&&Number(dMes.spend||0)>0?(Number(dMes.spend)/followsMes).toFixed(2):0;
 
     function parseIns(ins){
       const i=ins||{};
       const leads=getAction(i.actions,'onsite_conversion.messaging_conversation_started_7d')||getAction(i.actions,'lead');
       const vendas=getAction(i.actions,'purchase')||getAction(i.actions,'omni_purchase');
+      const follows=getFollows(i.actions);
       const cpl_raw=getCPA(i.cost_per_action_type,'onsite_conversion.messaging_conversation_started_7d')||getCPA(i.cost_per_action_type,'lead');
       const spend=Number(i.spend||0);
-      return {spend,impressions:Number(i.impressions||0),clicks:Number(i.clicks||0),reach:Number(i.reach||0),leads,vendas,cpm:Number(i.cpm||0),ctr:Number(i.ctr||0),freq:Number(i.frequency||0),cpl:cpl_raw>0?cpl_raw:(leads>0?spend/leads:0)};
+      const cpf=follows>0&&spend>0?(spend/follows):0;
+      return {spend,impressions:Number(i.impressions||0),clicks:Number(i.clicks||0),reach:Number(i.reach||0),leads,vendas,follows,cpf,cpm:Number(i.cpm||0),ctr:Number(i.ctr||0),freq:Number(i.frequency||0),cpl:cpl_raw>0?cpl_raw:(leads>0?spend/leads:0)};
     }
 
     const campaigns=(rCamp.data||[]).map(c=>{
@@ -3312,29 +3335,29 @@ async function syncMetaAds(){
       return {id:a.id,name:a.name||(cname||'Criativo'),status:a.status,adsetId:a.adset_id,campaignId:a.campaign_id,thumb,...parseIns(ins)};
     }).filter(a=>a.spend>0||a.status==='ACTIVE');
 
-    // Busca seguidores do Instagram (se tiver ig_user_id configurado)
+    // Busca seguidores do Instagram — usa histórico próprio (não precisa de instagram_manage_insights)
     let igFollowers=Number(state.config.igFollowers||0);
-    let followersByDay=[];
+    let igHistory=state.config.igHistory||[];
+    let followersByDay=state.config.adsData&&state.config.adsData.followersByDay||[];
     if(state.config.igUserId&&token){
       try{
         const rIg=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}?fields=followers_count&access_token=${token}`).then(r=>r.json());
-        if(rIg.followers_count){igFollowers=rIg.followers_count;state.config.igFollowers=igFollowers;}
-
-        // Busca variação diária dos últimos 30 dias
-        const since30ts=Math.floor((Date.now()-30*86400000)/1000);
-        const untilts=Math.floor(Date.now()/1000);
-        const rInsights=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}/insights?metric=follower_count&period=day&since=${since30ts}&until=${untilts}&access_token=${token}`).then(r=>r.json());
-        if(rInsights.data&&rInsights.data[0]&&rInsights.data[0].values){
-          followersByDay=rInsights.data[0].values.map(v=>{
-            // Converte end_time para data local
-            const dt=v.end_time?new Date(v.end_time):new Date();
-            // Subtrai 1 dia pois Meta usa end_time como início do próximo dia (meia noite UTC)
-            dt.setSeconds(dt.getSeconds()-1);
-            return {date:dt.toLocaleDateString('fr-CA'),delta:Number(v.value||0)};
+        if(rIg.followers_count){
+          igFollowers=rIg.followers_count;
+          state.config.igFollowers=igFollowers;
+          // Salva histórico: {date, count} — máx 60 dias
+          const todayKey=localDate(0);
+          igHistory=igHistory.filter(x=>x.date!==todayKey);
+          igHistory=[...igHistory,{date:todayKey,count:igFollowers}].sort((a,b)=>a.date.localeCompare(b.date)).slice(-60);
+          state.config.igHistory=igHistory;
+          // Calcula delta diário pela diferença entre registros consecutivos
+          followersByDay=igHistory.map((entry,i)=>{
+            if(i===0)return{date:entry.date,delta:0};
+            return{date:entry.date,delta:entry.count-(igHistory[i-1].count||entry.count)};
           });
-          console.log('Followers by day:', followersByDay.slice(-5));
+          showToast(`✅ Instagram: ${igFollowers.toLocaleString('pt-BR')} seguidores`,'gr');
         }
-      }catch(e){console.warn('Instagram insights error:',e);}
+      }catch(e){console.warn('Instagram error:',e);}
     }
 
     state.config.adsData={
@@ -3344,6 +3367,7 @@ async function syncMetaAds(){
       todayImpressions:Number(dHoje.impressions||0),todayClicks:Number(dHoje.clicks||0),
       leadsHoje,vendasHoje,valorVendasHoje,cplHoje,
       leadsMes,vendasMes,valorVendasMes,cplMes:Number(cplMes),
+      followsHoje,followsMes,cpfHoje:Number(cpfHoje),cpfMes:Number(cpfMes),
       campaigns,adsets,ads,followersByDay
     };
     state.config.adsLastSync=new Date().toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
