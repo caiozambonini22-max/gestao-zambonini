@@ -200,6 +200,9 @@ let currentTab = 'dashboard';
 const fmtBRL = v => Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtPct = v => Number(v||0).toFixed(2)+'%';
 const uid = () => Math.random().toString(36).slice(2,10);
+// Data local (YYYY-MM-DD) no fuso do browser — nunca usa UTC direto
+function localDate(offsetDays){const d=new Date();if(offsetDays)d.setDate(d.getDate()+offsetDays);return d.toLocaleDateString('fr-CA');}
+const localToday=()=>localDate(0);
 const stInfo = id => OS.find(s=>s.id===id)||OS[0];
 const nfInfo = id => NS.find(s=>s.id===id)||NS[0];
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -484,7 +487,7 @@ function updateStockBadge(){
 }
 
 // ============ DASHBOARD ============
-let dashPeriod='month', dashDay=new Date().toISOString().slice(0,10);
+let dashPeriod='month', dashDay=localDate(0);
 let dashMonth=new Date().getMonth(), dashYear=new Date().getFullYear();
 const MESES=['Janeiro','Fevereiro','Marco','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
@@ -534,7 +537,7 @@ function renderDashboard(){
     const rev=co.reduce((a,o)=>a+calcM(o).rev,0);
     return {...c,count:co.length,rev};
   }).filter(c=>c.count>0).sort((a,b)=>b.rev-a.rev);
-  const todayStr0=new Date().toISOString().slice(0,10);
+  const todayStr0=localDate(0);
   const adPeriodSpend=state.config.adsData?(dashPeriod==='day'&&dashDay===todayStr0?Number(state.config.adsData.today||0):Number(state.config.adsData.month||0)):0;
   const ads=adPeriodSpend>0?adPeriodSpend:Number(state.config.gastoAnuncios||0);
   const roas=ads>0?(totalRev/ads).toFixed(1):0;
@@ -548,12 +551,11 @@ function renderDashboard(){
 
   // Seguidores por período
   if(!window._igPeriod)window._igPeriod='hoje';
-  if(!window._igCustomDate)window._igCustomDate=new Date().toISOString().slice(0,10);
+  if(!window._igCustomDate)window._igCustomDate=localDate(0);
   const fbd=(state.config.adsData&&state.config.adsData.followersByDay)||[];
-  // Datas no fuso local (Brasília UTC-3)
-  const _tzOff=new Date().getTimezoneOffset()*60000;
-  const todayStr=new Date(Date.now()-_tzOff).toISOString().slice(0,10);
-  const yesterdayStr=new Date(Date.now()-_tzOff-86400000).toISOString().slice(0,10);
+  // Datas no fuso local (Brasília)
+  const todayStr=localDate(0);
+  const yesterdayStr=localDate(-1);
   function igDelta(dateStr){const d=fbd.find(x=>x.date===dateStr);return d?Number(d.delta||0):0;}
   function igDeltaRange(n){return fbd.filter(x=>x.date>=new Date(Date.now()-n*86400000).toISOString().slice(0,10)&&x.date<=todayStr).reduce((a,x)=>a+Number(x.delta||0),0);}
   const igPeriodLabel={'hoje':'Hoje','ontem':'Ontem','7d':'7 dias','30d':'30 dias','custom':'Data'}[window._igPeriod]||'Hoje';
@@ -882,12 +884,18 @@ function renderOrderModal(){
   acts.forEach(a=>{const chk=(o.postActions||{})[a.k];actsHTML+=`<div class="ck-r ${chk?'on':''}" data-act="${a.k}" onclick="toggleAct('${a.k}')"><div class="ck-b ${chk?'on':''}">${chk?'v':''}</div><span class="ck-lbl" style="font-size:12px;color:${chk?'var(--or)':'var(--txm)'}">${a.i} ${a.l}</span></div>`;});
 
   return `<div style="max-width:1400px;margin:0 auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
       <div>
         <div style="font-size:22px;font-weight:800;color:var(--or)">${isNew?'NOVO PEDIDO':'EDITAR PEDIDO #'+o.orderNum}</div>
         <div style="font-size:11px;color:var(--txm)">Cole os textos do WhatsApp e o sistema preenche automaticamente</div>
       </div>
-      <button class="btn bg2" onclick="closeOrderModal()" style="font-size:13px">← Voltar</button>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="field" style="margin:0">
+          <label style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--txd)">Data do Pedido</label>
+          <input type="date" value="${o.date}" oninput="setOrderField('date',this.value)" style="font-size:14px;font-weight:600;color:var(--or);border-color:var(--or);background:var(--ordim)">
+        </div>
+        <button class="btn bg2" onclick="closeOrderModal()" style="font-size:13px">← Voltar</button>
+      </div>
     </div>
 
     <!-- PARSER WHATSAPP -->
@@ -3226,17 +3234,12 @@ async function syncMetaAds(){
     if(!window._adsPer)window._adsPer='hoje';
   const per=window._adsPer;
 
-  // Datas no fuso de Brasília (UTC-3) — evita virar dia antes da hora
-  function brDate(offsetDays){
-    const d=new Date(Date.now()-new Date().getTimezoneOffset()*60000);
-    if(offsetDays)d.setDate(d.getDate()+offsetDays);
-    return d.toISOString().slice(0,10);
-  }
-  const todayD=brDate(0);
-  const yesterdayD=brDate(-1);
-  const since7=brDate(-6);
-  const since30=brDate(-29);
-  const firstDayD=new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10);
+  // Datas no fuso local (Brasília) — evita virar dia antes da hora
+  const todayD=localDate(0);
+  const yesterdayD=localDate(-1);
+  const since7=localDate(-6);
+  const since30=localDate(-29);
+  const firstDayD=new Date(new Date().getFullYear(),new Date().getMonth(),1).toLocaleDateString('fr-CA');
 
   let sinceD,untilD;
   if(per==='hoje'){sinceD=todayD;untilD=todayD;}
@@ -3322,12 +3325,14 @@ async function syncMetaAds(){
         const untilts=Math.floor(Date.now()/1000);
         const rInsights=await fetch(`https://graph.facebook.com/v19.0/${state.config.igUserId}/insights?metric=follower_count&period=day&since=${since30ts}&until=${untilts}&access_token=${token}`).then(r=>r.json());
         if(rInsights.data&&rInsights.data[0]&&rInsights.data[0].values){
-          const tzOffset=new Date().getTimezoneOffset()*60000;
           followersByDay=rInsights.data[0].values.map(v=>{
-            // Converte end_time para data local (Brasília UTC-3)
-            const endMs=v.end_time?new Date(v.end_time).getTime()-tzOffset:Date.now()-tzOffset;
-            return {date:new Date(endMs).toISOString().slice(0,10),delta:v.value};
+            // Converte end_time para data local
+            const dt=v.end_time?new Date(v.end_time):new Date();
+            // Subtrai 1 dia pois Meta usa end_time como início do próximo dia (meia noite UTC)
+            dt.setSeconds(dt.getSeconds()-1);
+            return {date:dt.toLocaleDateString('fr-CA'),delta:Number(v.value||0)};
           });
+          console.log('Followers by day:', followersByDay.slice(-5));
         }
       }catch(e){console.warn('Instagram insights error:',e);}
     }
