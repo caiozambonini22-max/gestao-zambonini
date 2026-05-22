@@ -513,6 +513,11 @@ function getFiltered(){
   return state.orders.filter(o=>{
     if(!o.date)return false;
     if(dashPeriod==='day')return o.date===dashDay;
+    if(dashPeriod==='week'){
+      // Últimos 7 dias (incluindo hoje), no fuso local
+      const ini=localDate(-6);const fim=localDate(0);
+      return o.date>=ini&&o.date<=fim;
+    }
     const d=new Date(o.date);
     if(dashPeriod==='month')return d.getMonth()===dashMonth&&d.getFullYear()===dashYear;
     return d.getFullYear()===dashYear;
@@ -564,7 +569,7 @@ function renderDashboard(){
   const igF30=Number(state.config.igF30||0);
   const valores=state.config.valores||[];
   const presOrders=filtered.filter(o=>o.isPresencial);
-  const periodLabel=dashPeriod==='day'?dashDay:dashPeriod==='month'?MESES[dashMonth]+' '+dashYear:String(dashYear);
+  const periodLabel=dashPeriod==='day'?dashDay:dashPeriod==='week'?'últimos 7 dias':dashPeriod==='month'?MESES[dashMonth]+' '+dashYear:String(dashYear);
   const years=Array.from({length:81},(_,i)=>new Date().getFullYear()-5+i);
 
   // Seguidores por período
@@ -700,6 +705,7 @@ function renderDashboard(){
   <div class="pf">
     <div style="display:flex;gap:4px">
       <button class="ptab ${dashPeriod==='day'?'active':''}" onclick="setDashPeriod('day')">Hoje</button>
+      <button class="ptab ${dashPeriod==='week'?'active':''}" onclick="setDashPeriod('week')">Esta Semana</button>
       <button class="ptab ${dashPeriod==='month'?'active':''}" onclick="setDashPeriod('month')">Este Mes</button>
       <button class="ptab ${dashPeriod==='year'?'active':''}" onclick="setDashPeriod('year')">Este Ano</button>
     </div>
@@ -1366,8 +1372,19 @@ function toggleItemGift(idx){
   if(!orderModalData)return;
   initOrderItems();
   syncItemsFromDOM();
-  orderModalData.items[idx].isGift=!orderModalData.items[idx].isGift;
-  if(orderModalData.items[idx].isGift)orderModalData.items[idx].salePrice='0';
+  const it=orderModalData.items[idx];
+  const willBeGift=!it.isGift;
+  if(willBeGift){
+    // Vai virar brinde: guarda o valor atual para poder restaurar depois, zera a cobrança
+    it._prevPrice=it.salePrice;
+    it.salePrice='0';
+  }else{
+    // Vai deixar de ser brinde: restaura o valor guardado, ou o preço de tabela do produto
+    if(it._prevPrice!==undefined&&Number(it._prevPrice)>0){it.salePrice=it._prevPrice;}
+    else{const p=state.prods.find(x=>x.id===it.productId);it.salePrice=p&&p.salePrice?p.salePrice:'';}
+    delete it._prevPrice;
+  }
+  it.isGift=willBeGift;
   refreshItemsList();
 }
 window._ufProdVal='';
@@ -3017,6 +3034,8 @@ function updateOrderSummary(){
     return getCost(p,si)*Number(it.quantity||1);
   });
   const ctotal=custoItens.reduce((a,c)=>a+c,0);
+  // Custo só dos brindes (para destacar no resumo)
+  const custoBrindes=items.reduce((a,it,i)=>it.isGift?a+custoItens[i]:a,0);
   const mot=Number(o.motoboyCost||0);const cor=Number(o.correiosCost||0);
   const fee=sumFees(o.payments,state.maqs,rev);
   const td=ctotal+mot+cor+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
@@ -3033,6 +3052,7 @@ function updateOrderSummary(){
   s.innerHTML=`<div style="font-size:11px;line-height:1.9">
     ${itemLines?`<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bd)">${itemLines}</div>`:''}
     <div>Receita: <strong style="color:var(--or)">${fmtBRL(rev)}</strong></div>
+    ${custoBrindes>0?`<div style="font-size:10px;color:var(--txd)">↳ inclui 🎁 brindes: <strong style="color:var(--rd)">−${fmtBRL(custoBrindes)}</strong></div>`:''}
     <div>Custo total: <strong style="color:var(--rd)">${fmtBRL(td)}</strong></div>
     <div>Lucro: <strong style="color:${profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(profit)}</strong></div>
     <div>ROI: <strong style="color:${roi>=0?'var(--gr)':'var(--rd)'}">${fmtPct(roi)}</strong></div>
