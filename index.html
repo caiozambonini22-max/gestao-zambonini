@@ -561,7 +561,8 @@ function renderDashboard(){
     return {...c,count:co.length,rev};
   }).filter(c=>c.count>0).sort((a,b)=>b.rev-a.rev);
   const todayStr0=localDate(0);
-  const adPeriodSpend=state.config.adsData?(dashPeriod==='day'&&dashDay===todayStr0?Number(state.config.adsData.today||0):Number(state.config.adsData.month||0)):0;
+  const _isCurMonth=dashMonth===new Date().getMonth()&&dashYear===new Date().getFullYear();
+  const adPeriodSpend=state.config.adsData?(dashPeriod==='day'&&dashDay===todayStr0?Number(state.config.adsData.today||0):(dashPeriod==='month'&&_isCurMonth?Number(state.config.adsData.month||0):0)):0;
   const ads=adPeriodSpend>0?adPeriodSpend:Number(state.config.gastoAnuncios||0);
   const roas=ads>0?(totalRev/ads).toFixed(1):0;
   const igF=Number(state.config.igFollowers||0);
@@ -569,7 +570,7 @@ function renderDashboard(){
   const igF30=Number(state.config.igF30||0);
   const valores=state.config.valores||[];
   const presOrders=filtered.filter(o=>o.isPresencial);
-  const periodLabel=dashPeriod==='day'?dashDay:dashPeriod==='week'?'últimos 7 dias':dashPeriod==='month'?MESES[dashMonth]+' '+dashYear:String(dashYear);
+  const periodLabel=dashPeriod==='day'?(dashDay===localDate(0)?'hoje':dashDay===localDate(-1)?'ontem':dashDay):dashPeriod==='week'?'últimos 7 dias':dashPeriod==='month'?MESES[dashMonth]+' '+dashYear:String(dashYear);
   const years=Array.from({length:81},(_,i)=>new Date().getFullYear()-5+i);
 
   // Seguidores por período
@@ -703,14 +704,24 @@ function renderDashboard(){
 
   return `
   <div class="pf">
-    <div style="display:flex;gap:4px">
-      <button class="ptab ${dashPeriod==='day'?'active':''}" onclick="setDashPeriod('day')">Hoje</button>
+    <div style="display:flex;gap:4px;flex-wrap:wrap">
+      <button class="ptab ${dashPeriod==='day'&&dashDay===localDate(0)?'active':''}" onclick="dashDay='${localDate(0)}';setDashPeriod('day')">Hoje</button>
+      <button class="ptab ${dashPeriod==='day'&&dashDay===localDate(-1)?'active':''}" onclick="setOntem()">Ontem</button>
       <button class="ptab ${dashPeriod==='week'?'active':''}" onclick="setDashPeriod('week')">Esta Semana</button>
       <button class="ptab ${dashPeriod==='month'?'active':''}" onclick="setDashPeriod('month')">Este Mes</button>
       <button class="ptab ${dashPeriod==='year'?'active':''}" onclick="setDashPeriod('year')">Este Ano</button>
     </div>
-    ${dashPeriod==='day'?`<input type="date" value="${dashDay}" onchange="dashDay=this.value;render()" style="width:155px">`:''}
-    ${dashPeriod==='month'?`<select onchange="dashMonth=Number(this.value);render()" style="width:125px">${MESES.map((m,i)=>`<option value="${i}" ${i===dashMonth?'selected':''}>${m}</option>`).join('')}</select><select onchange="dashYear=Number(this.value);render()" style="width:85px">${years.map(y=>`<option ${y===dashYear?'selected':''}>${y}</option>`).join('')}</select>`:''}
+    ${dashPeriod==='day'?`<div style="display:flex;gap:4px;align-items:center">
+      <button class="ptab" style="padding:6px 11px" onclick="navDay(-1)" title="Dia anterior">‹</button>
+      <input type="date" value="${dashDay}" max="${localDate(0)}" onchange="dashDay=this.value;render()" style="width:150px">
+      <button class="ptab" style="padding:6px 11px;${dashDay>=localDate(0)?'opacity:.35;pointer-events:none':''}" onclick="navDay(1)" title="Próximo dia">›</button>
+    </div>`:''}
+    ${dashPeriod==='month'?`<div style="display:flex;gap:4px;align-items:center">
+      <button class="ptab" style="padding:6px 11px" onclick="navMonth(-1)" title="Mês anterior">‹</button>
+      <select onchange="dashMonth=Number(this.value);render()" style="width:125px">${MESES.map((m,i)=>`<option value="${i}" ${i===dashMonth?'selected':''}>${m}</option>`).join('')}</select>
+      <select onchange="dashYear=Number(this.value);render()" style="width:85px">${years.map(y=>`<option ${y===dashYear?'selected':''}>${y}</option>`).join('')}</select>
+      <button class="ptab" style="padding:6px 11px" onclick="navMonth(1)" title="Próximo mês">›</button>
+    </div>`:''}
     ${dashPeriod==='year'?`<select onchange="dashYear=Number(this.value);render()" style="width:95px">${years.map(y=>`<option ${y===dashYear?'selected':''}>${y}</option>`).join('')}</select>`:''}
     <div style="margin-left:auto;font-size:12px;color:var(--txd)"><span style="color:var(--or);font-weight:700">${filtered.length}</span> pedidos em ${periodLabel}</div>
   </div>
@@ -733,8 +744,12 @@ function renderDashboard(){
             // Usa o gasto do período selecionado no dashboard
             let spendLabel,spendVal;
             if(dashPeriod==='day'&&dashDay===todayStr2){spendLabel='Hoje';spendVal=Number(ad.today||0);}
-            else if(dashPeriod==='month'){spendLabel='Este mês';spendVal=Number(ad.month||0);}
-            else{spendLabel=periodLabel;spendVal=Number(ad.month||0);}
+            else if(dashPeriod==='month'&&dashMonth===new Date().getMonth()&&dashYear===new Date().getFullYear()){spendLabel='Este mês';spendVal=Number(ad.month||0);}
+            else{spendLabel='';spendVal=null;}
+            if(spendVal===null){
+              return `<div style="font-size:26px;font-weight:800;color:var(--txd);margin:6px 0">—</div>
+              <div style="font-size:10px;color:var(--txd);margin-bottom:8px">Gasto disponível só para hoje e mês atual via Meta Ads</div>`;
+            }
             return `<div style="font-size:26px;font-weight:800;color:var(--or);margin:6px 0">${fmtBRL(spendVal)}</div>
             <div style="font-size:10px;color:var(--gr);margin-bottom:8px">✅ ${spendLabel} — Automático via Meta Ads</div>`;
           })()}
@@ -830,6 +845,24 @@ function renderDashboard(){
 }
 
 function setDashPeriod(p){dashPeriod=p;render();}
+// Navegação por dia (setas no modo Hoje/Ontem)
+function navDay(delta){
+  const d=new Date((dashDay||localDate(0))+'T12:00:00');
+  d.setDate(d.getDate()+delta);
+  // não deixa passar de hoje
+  const todayK=localDate(0);
+  const novo=d.toLocaleDateString('fr-CA');
+  dashDay=novo>todayK?todayK:novo;
+  dashPeriod='day';render();
+}
+// Atalho: ir direto para ontem
+function setOntem(){dashDay=localDate(-1);dashPeriod='day';render();}
+// Navegação por mês (setas no modo Este Mês)
+function navMonth(delta){
+  let m=dashMonth+delta,y=dashYear;
+  if(m<0){m=11;y--;}else if(m>11){m=0;y++;}
+  dashMonth=m;dashYear=y;dashPeriod='month';render();
+}
 function updateConfig(k,v){state.config[k]=v;save('config');render();}
 function addValor(){state.config.valores=[...(state.config.valores||[]),'Novo valor...'];save('config');render();}
 function removeValor(i){state.config.valores=state.config.valores.filter((_,x)=>x!==i);save('config');render();}
