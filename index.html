@@ -225,7 +225,7 @@ function sumFees(payments,maqs,orderTotal){
 function getCost(prod,si){if(!prod)return 0;if(prod.costMode==='avg'&&si&&Number(si.avgCost)>0)return Number(si.avgCost);return Number(prod.costPrice||0);}
 function calcM(order){
   if(!order)return{fee:0,rev:0,profit:0,roi:0,mot:0,cor:0,upsell:0,cost:0};
-  const mot=Number(order.motoboyCost||0);const cor=Number(order.correiosCost||0);
+  const mot=Number(order.motoboyCost||0)+Number(order.fuelCost||0)+Number(order.tollCost||0);const cor=Number(order.correiosCost||0);
   const upsell=(order.upsells||[]).reduce((s,u)=>s+Number(u.price||0),0);
 
   // Soma todos os itens (inclui brindes no custo, exclui na receita)
@@ -3036,9 +3036,11 @@ function updateOrderSummary(){
   const ctotal=custoItens.reduce((a,c)=>a+c,0);
   // Custo só dos brindes (para destacar no resumo)
   const custoBrindes=items.reduce((a,it,i)=>it.isGift?a+custoItens[i]:a,0);
+  // Custo de entrega: motoboy + correios + combustível + pedágio
+  const entrega=Number(o.motoboyCost||0)+Number(o.correiosCost||0)+Number(o.fuelCost||0)+Number(o.tollCost||0);
   const mot=Number(o.motoboyCost||0);const cor=Number(o.correiosCost||0);
   const fee=sumFees(o.payments,state.maqs,rev);
-  const td=ctotal+mot+cor+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
+  const td=ctotal+entrega+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
   const s=document.getElementById('order-summary');
   if(!s)return;
   // Mostra custo por item
@@ -3053,6 +3055,8 @@ function updateOrderSummary(){
     ${itemLines?`<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bd)">${itemLines}</div>`:''}
     <div>Receita: <strong style="color:var(--or)">${fmtBRL(rev)}</strong></div>
     ${custoBrindes>0?`<div style="font-size:10px;color:var(--txd)">↳ inclui 🎁 brindes: <strong style="color:var(--rd)">−${fmtBRL(custoBrindes)}</strong></div>`:''}
+    ${fee>0?`<div style="font-size:10px;color:var(--txd)">↳ taxa maquininha: <strong style="color:var(--rd)">−${fmtBRL(fee)}</strong></div>`:''}
+    ${entrega>0?`<div style="font-size:10px;color:var(--txd)">↳ entrega/frete: <strong style="color:var(--rd)">−${fmtBRL(entrega)}</strong></div>`:''}
     <div>Custo total: <strong style="color:var(--rd)">${fmtBRL(td)}</strong></div>
     <div>Lucro: <strong style="color:${profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(profit)}</strong></div>
     <div>ROI: <strong style="color:${roi>=0?'var(--gr)':'var(--rd)'}">${fmtPct(roi)}</strong></div>
