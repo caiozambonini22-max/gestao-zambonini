@@ -466,6 +466,8 @@ async function loadAll(){
   }catch(e){
     setSyncStatus('error');
   }
+  // Garante snapshot diário de seguidores + agenda captura à meia-noite
+  try{if(typeof scheduleFollowerSnapshot==='function')scheduleFollowerSnapshot();}catch(e){console.warn('scheduleFollowerSnapshot:',e);}
 }
 
 // ============ RENDER ENGINE ============
@@ -568,22 +570,82 @@ function renderDashboard(){
   // Seguidores por período
   if(!window._igPeriod)window._igPeriod='hoje';
   if(!window._igCustomDate)window._igCustomDate=localDate(0);
+  if(!window._igCustomDe)window._igCustomDe=localDate(-7);
+  if(!window._igCustomAte)window._igCustomAte=localDate(0);
   const fbd=(state.config.adsData&&state.config.adsData.followersByDay)||[];
   // Datas no fuso local (Brasília)
   const todayStr=localDate(0);
   const yesterdayStr=localDate(-1);
   function igDelta(dateStr){const d=fbd.find(x=>x.date===dateStr);return d?Number(d.delta||0):0;}
-  function igDeltaRange(n){
-    // Usa diferença entre o mais recente e o registro de n dias atrás
-    const hist=state.config.igHistory||[];
-    if(hist.length<2)return 0;
-    const latest=hist[hist.length-1];
-    const cutoff=localDate(-n);
-    const old=hist.filter(x=>x.date<=cutoff).pop()||hist[0];
-    return latest.count-(old.count||latest.count);
+  // ── CÁLCULO UNIFICADO DE GANHO DE SEGUIDORES ──
+  // Tudo deriva de igHistory [{date, count}] — a fonte de verdade.
+  // Ganho num período = count mais recente − count do registro de referência (início do período).
+  const _igHist=(state.config.igHistory||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  function igCountOn(dateStr){
+    // Count registrado EM dateStr (exato). null se não houver snapshot nesse dia.
+    const e=_igHist.find(x=>x.date===dateStr);
+    return e?Number(e.count):null;
   }
-  const igPeriodLabel={'hoje':'Hoje','ontem':'Ontem','7d':'7 dias','30d':'30 dias','custom':'Data'}[window._igPeriod]||'Hoje';
-  const igPeriodDelta=window._igPeriod==='hoje'?igDelta(todayStr):window._igPeriod==='ontem'?igDelta(yesterdayStr):window._igPeriod==='7d'?igDeltaRange(7):window._igPeriod==='30d'?igDeltaRange(30):igDelta(window._igCustomDate);
+  function igCountAsOf(dateStr){
+    // Último count conhecido ATÉ dateStr (inclusive) — preenche lacunas de dias não sincronizados.
+    let val=null;
+    for(const e of _igHist){if(e.date<=dateStr)val=Number(e.count);else break;}
+    return val;
+  }
+  const igLatest=_igHist.length?Number(_igHist[_igHist.length-1].count):0;
+  // Ganho "Hoje" = count atual − count de ONTEM (registro de ontem, ou último antes de hoje)
+  function igGainToday(){
+    if(_igHist.length<2)return null; // sem base de comparação
+    const ref=igCountAsOf(localDate(-1)); // count no fim de ontem
+    if(ref===null)return null;
+    return igLatest-ref;
+  }
+  // Ganho "Ontem" = count do fim de ontem − count do fim de anteontem
+  function igGainYesterday(){
+    const end=igCountAsOf(localDate(-1));
+    const start=igCountAsOf(localDate(-2));
+    if(end===null||start===null)return null;
+    return end-start;
+  }
+  // Ganho nos últimos N dias = count atual − count de N dias atrás
+  function igGainRange(n){
+    if(_igHist.length<2)return null;
+    const ref=igCountAsOf(localDate(-n));
+    if(ref===null)return null;
+    return igLatest-ref;
+  }
+  // Ganho num dia específico (custom) = count desse dia − count do dia anterior
+  function igGainOn(dateStr){
+    const end=igCountAsOf(dateStr);
+    const prev=localDate(0)===dateStr?localDate(-1):(()=>{const d=new Date(dateStr+'T12:00:00');d.setDate(d.getDate()-1);return d.toLocaleDateString('fr-CA');})();
+    const start=igCountAsOf(prev);
+    if(end===null||start===null)return null;
+    return end-start;
+  }
+  // Ganho numa FAIXA personalizada [de, até] = count em 'até' − count no dia anterior a 'de'.
+  // Se de===até, equivale ao ganho de um único dia.
+  function igGainBetween(deStr,ateStr){
+    if(!deStr||!ateStr)return null;
+    if(deStr>ateStr){const t=deStr;deStr=ateStr;ateStr=t;}
+    const dayBeforeDe=(()=>{const d=new Date(deStr+'T12:00:00');d.setDate(d.getDate()-1);return d.toLocaleDateString('fr-CA');})();
+    const end=igCountAsOf(ateStr);
+    const start=igCountAsOf(dayBeforeDe);
+    if(end===null||start===null)return null;
+    return end-start;
+  }
+  // Série dia a dia: para cada registro, ganho = count − count do registro anterior.
+  // Retorna do mais recente para o mais antigo.
+  function igDailySeries(){
+    const out=[];
+    for(let i=1;i<_igHist.length;i++){
+      out.push({date:_igHist[i].date,count:_igHist[i].count,gain:_igHist[i].count-_igHist[i-1].count});
+    }
+    return out.reverse();
+  }
+  const igPeriodLabel={'hoje':'Hoje','ontem':'Ontem','7d':'Últimos 7 dias','30d':'Últimos 30 dias','custom':'Período personalizado'}[window._igPeriod]||'Hoje';
+  const igPeriodDeltaRaw=window._igPeriod==='hoje'?igGainToday():window._igPeriod==='ontem'?igGainYesterday():window._igPeriod==='7d'?igGainRange(7):window._igPeriod==='30d'?igGainRange(30):igGainBetween(window._igCustomDe,window._igCustomAte);
+  const igPeriodDelta=igPeriodDeltaRaw===null?0:igPeriodDeltaRaw;
+  const igPeriodNoData=igPeriodDeltaRaw===null;
   const igPeriodSpend=window._igPeriod==='hoje'?(state.config.adsData&&Number(state.config.adsData.today||0)):window._igPeriod==='30d'?(state.config.adsData&&Number(state.config.adsData.month||0)):0;
   // Custo por seguidor: usa dados do Meta Ads se disponível, senão calcula pelo histórico
   const adFollowsMes=state.config.adsData&&Number(state.config.adsData.followsMes||0);
@@ -591,6 +653,24 @@ function renderDashboard(){
   const igCustoSeg=window._igPeriod==='hoje'&&igPeriodDelta>0&&igPeriodSpend>0?(igPeriodSpend/igPeriodDelta).toFixed(2):
     window._igPeriod==='30d'&&igPeriodDelta>0&&igPeriodSpend>0?(igPeriodSpend/igPeriodDelta).toFixed(2):
     adCpfMes>0?adCpfMes.toFixed(2):null;
+
+  // ── Lista dia a dia (mais recente no topo) com mini-barras ──
+  if(!window._igShowDaily)window._igShowDaily=false;
+  const _daily=igDailySeries();
+  const _maxAbs=_daily.reduce((m,d)=>Math.max(m,Math.abs(d.gain)),0)||1;
+  function _fmtDiaBR(ds){const p=ds.split('-');return p[2]+'/'+p[1];}
+  const igDailyHTML=_daily.length===0?
+    `<div style="font-size:10px;color:var(--txd);text-align:center;padding:10px">Sem histórico suficiente ainda.</div>`:
+    _daily.slice(0,30).map(d=>{
+      const pct=Math.round((Math.abs(d.gain)/_maxAbs)*100);
+      const col=d.gain>0?'var(--gr)':d.gain<0?'var(--rd)':'var(--txm)';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--bd)">
+        <div style="font-size:10px;color:var(--txm);width:42px;flex-shrink:0">${_fmtDiaBR(d.date)}</div>
+        <div style="flex:1;background:var(--sf3);border-radius:3px;height:6px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${col};width:${pct}%"></div></div>
+        <div style="font-size:11px;font-weight:700;color:${col};width:46px;text-align:right;flex-shrink:0">${d.gain>0?'+':''}${d.gain}</div>
+        <div style="font-size:9px;color:var(--txd);width:54px;text-align:right;flex-shrink:0">${d.count.toLocaleString('pt-BR')}</div>
+      </div>`;
+    }).join('');
 
   let citiesHTML='';
   if(topCities.length===0){citiesHTML='<div class="empty"><div class="empty-ic">📍</div><p>Sem dados no periodo</p></div>';}
@@ -681,30 +761,51 @@ function renderDashboard(){
 
         <!-- Filtros de período -->
         <div style="display:flex;gap:5px;margin-bottom:10px;flex-wrap:wrap">
-          ${['hoje','ontem','7d','30d'].map(p=>`<button onclick="window._igPeriod='${p}';render()" style="padding:3px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid ${window._igPeriod===p?'var(--or)':'var(--bd)'};background:${window._igPeriod===p?'var(--or)':'transparent'};color:${window._igPeriod===p?'#fff':'var(--txm)'}">
-            ${{hoje:'Hoje',ontem:'Ontem','7d':'7 dias','30d':'30 dias'}[p]}
-          </button>`).join('')}
-          <input type="date" value="${window._igCustomDate}" onchange="window._igPeriod='custom';window._igCustomDate=this.value;render()" style="padding:2px 6px;border-radius:20px;font-size:11px;border:1px solid ${window._igPeriod==='custom'?'var(--or)':'var(--bd)'};background:${window._igPeriod==='custom'?'var(--ordim)':'transparent'};color:var(--tx);cursor:pointer">
+          ${[['hoje','Hoje'],['ontem','Ontem'],['7d','7 dias'],['30d','30 dias'],['custom','Personalizado']].map(([p,l])=>`<button onclick="window._igPeriod='${p}';render()" style="padding:3px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid ${window._igPeriod===p?'var(--or)':'var(--bd)'};background:${window._igPeriod===p?'var(--or)':'transparent'};color:${window._igPeriod===p?'#fff':'var(--txm)'}">${l}</button>`).join('')}
         </div>
 
+        ${window._igPeriod==='custom'?`
+        <!-- Seletor de faixa personalizada -->
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px;background:var(--sf3);border-radius:8px;padding:8px 10px">
+          <div class="field" style="flex:1;margin:0"><label style="font-size:9px">De</label><input type="date" value="${window._igCustomDe}" max="${window._igCustomAte}" onchange="window._igCustomDe=this.value;render()" style="width:100%;font-size:11px"></div>
+          <div class="field" style="flex:1;margin:0"><label style="font-size:9px">Até</label><input type="date" value="${window._igCustomAte}" min="${window._igCustomDe}" max="${todayStr}" onchange="window._igCustomAte=this.value;render()" style="width:100%;font-size:11px"></div>
+        </div>
+        <div style="font-size:9px;color:var(--txd);margin:-4px 0 8px 2px">Escolha a mesma data nos dois campos para ver o ganho de um único dia.</div>
+        `:''}
+
         <!-- Resultado do período selecionado -->
-        <div style="background:var(--sf3);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid ${igPeriodDelta>0?'rgba(34,197,94,.3)':igPeriodDelta<0?'rgba(239,68,68,.2)':'var(--bd)'}">
-          <div style="font-size:10px;color:var(--txd);margin-bottom:4px">Novos seguidores — ${igPeriodLabel}</div>
-          <div style="font-size:24px;font-weight:800;color:${igPeriodDelta>0?'var(--gr)':igPeriodDelta<0?'var(--rd)':'var(--txm)'}">
-            ${igPeriodDelta>0?'+':''}${igPeriodDelta}
-            ${fbd.length===0?`<span style="font-size:10px;color:var(--txd);font-weight:400"> — clique em Sincronizar</span>`:''}
+        <div style="background:var(--sf3);border-radius:8px;padding:10px 12px;margin-bottom:10px;border:1px solid ${igPeriodNoData?'var(--bd)':igPeriodDelta>0?'rgba(34,197,94,.3)':igPeriodDelta<0?'rgba(239,68,68,.2)':'var(--bd)'}">
+          <div style="font-size:10px;color:var(--txd);margin-bottom:4px">Novos seguidores — ${igPeriodLabel}${window._igPeriod==='custom'&&!igPeriodNoData?` <span style="color:var(--txm)">(${_fmtDiaBR(window._igCustomDe<window._igCustomAte?window._igCustomDe:window._igCustomAte)} → ${_fmtDiaBR(window._igCustomDe<window._igCustomAte?window._igCustomAte:window._igCustomDe)})</span>`:''}</div>
+          <div style="font-size:24px;font-weight:800;color:${igPeriodNoData?'var(--txd)':igPeriodDelta>0?'var(--gr)':igPeriodDelta<0?'var(--rd)':'var(--txm)'}">
+            ${igPeriodNoData?'—':(igPeriodDelta>0?'+':'')+igPeriodDelta}
+            ${igPeriodNoData?`<span style="font-size:10px;color:var(--txd);font-weight:400"> — aguardando histórico</span>`:''}
           </div>
           ${igCustoSeg?`<div style="font-size:11px;color:var(--txd);margin-top:4px">💰 Custo por seguidor: <strong style="color:var(--or)">R$ ${igCustoSeg}</strong></div>`:''}
         </div>
 
         <!-- Resumo rápido dos 4 períodos -->
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
-          ${[['Hoje',igDelta(todayStr)],['Ontem',igDelta(yesterdayStr)],['7 dias',igDeltaRange(7)],['30 dias',igDeltaRange(30)]].map(([l,v])=>`
-            <div style="background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center">
+          ${[['Hoje',igGainToday()],['Ontem',igGainYesterday()],['7 dias',igGainRange(7)],['30 dias',igGainRange(30)]].map(([l,raw])=>{
+            const v=raw===null?0:raw;const nd=raw===null;
+            return `<div style="background:var(--sf3);border-radius:6px;padding:7px 8px;text-align:center">
               <div style="font-size:9px;color:var(--txd);margin-bottom:3px">${l}</div>
-              <div style="font-size:14px;font-weight:700;color:${v>0?'var(--gr)':v<0?'var(--rd)':'var(--txm)'}">${v>0?'+':''}${v}</div>
-            </div>`).join('')}
+              <div style="font-size:14px;font-weight:700;color:${nd?'var(--txd)':v>0?'var(--gr)':v<0?'var(--rd)':'var(--txm)'}">${nd?'—':(v>0?'+':'')+v}</div>
+            </div>`;}).join('')}
         </div>
+        ${_igHist.length<2?`<div style="font-size:9px;color:var(--txd);text-align:center;margin-top:6px;line-height:1.4">📍 Os ganhos aparecem após 2+ dias de histórico. O snapshot é capturado automaticamente todo dia.</div>`:''}
+
+        <!-- Visão dia por dia -->
+        ${_daily.length>0?`
+        <button onclick="window._igShowDaily=!window._igShowDaily;render()" style="margin-top:10px;width:100%;background:transparent;border:1px solid var(--bd);border-radius:7px;padding:7px;font-size:11px;color:var(--txm);cursor:pointer">
+          ${window._igShowDaily?'▲ Ocultar':'▼ Ver'} histórico dia a dia
+        </button>
+        ${window._igShowDaily?`<div style="margin-top:8px;max-height:260px;overflow-y:auto;padding-right:4px">
+          <div style="display:flex;align-items:center;gap:8px;padding:0 0 4px;font-size:8px;color:var(--txd);text-transform:uppercase;letter-spacing:.5px">
+            <div style="width:42px;flex-shrink:0">Dia</div><div style="flex:1">Ganho</div><div style="width:46px;text-align:right;flex-shrink:0">+/−</div><div style="width:54px;text-align:right;flex-shrink:0">Total</div>
+          </div>
+          ${igDailyHTML}
+        </div>`:''}
+        `:''}
       </div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="ct">Valores da Loja</div></div>
@@ -3228,6 +3329,8 @@ function openAdsConfig(){
         <label>Instagram User ID <span style="color:var(--txd);font-size:10px">(para buscar seguidores automaticamente)</span></label>
         <input id="ads-igid" value="${state.config.igUserId||''}" placeholder="Ex: 17841400000000000">
         <div style="font-size:10px;color:var(--txd);margin-top:3px">Cole na barra: graph.facebook.com/me/accounts?access_token=SEU_TOKEN → copie o instagram_business_account id</div>
+        <button class="btn bg2 sm" style="margin-top:8px" onclick="captureFollowerSnapshot({silent:false})">📸 Capturar seguidores agora</button>
+        <div style="font-size:9px;color:var(--txd);margin-top:4px;line-height:1.4">Grava o número atual no histórico de hoje. O sistema também captura sozinho à meia-noite enquanto a aba estiver aberta. O ganho por período aparece após 2 dias de registro.</div>
       </div>
       <div style="border-top:1px solid var(--bd);padding-top:10px;margin-top:2px">
         <div style="font-size:10px;font-weight:600;color:var(--txd);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Seguidores Instagram (manual)</div>
@@ -3393,6 +3496,49 @@ async function syncMetaAds(){
   }catch(e){setSyncStatus('error');showToast('❌ Erro ao conectar com Meta Ads. Verifique o token.','rd');}
 }
 
+// ============ SNAPSHOT AUTOMÁTICO DE SEGUIDORES ============
+// Grava {date, count} no igHistory. Idempotente: 1 registro por dia (sobrescreve o do dia).
+// Independe da sincronização do Meta Ads — só precisa do token e do igUserId.
+async function captureFollowerSnapshot(opts){
+  opts=opts||{};
+  const token=state.config.metaToken;
+  const uid=state.config.igUserId;
+  if(!token||!uid)return false;
+  try{
+    const r=await fetch(`https://graph.facebook.com/v19.0/${uid}?fields=followers_count&access_token=${token}`).then(r=>r.json());
+    const count=Number(r&&r.followers_count);
+    if(!count||isNaN(count))return false;
+    const today=localDate(0);
+    let hist=(state.config.igHistory||[]).filter(x=>x&&x.date!==today);
+    hist=[...hist,{date:today,count}].sort((a,b)=>a.date.localeCompare(b.date)).slice(-90);
+    state.config.igHistory=hist;
+    state.config.igFollowers=count;
+    // Mantém followersByDay (deltas consecutivos) coerente para telas legadas
+    state.config.adsData=state.config.adsData||{};
+    state.config.adsData.followersByDay=hist.map((e,i)=>i===0?{date:e.date,delta:0}:{date:e.date,delta:e.count-hist[i-1].count});
+    save('config');
+    if(opts.silent!==true)showToast(`✅ Seguidores: ${count.toLocaleString('pt-BR')}`,'gr');
+    if(opts.render!==false)render();
+    return true;
+  }catch(e){console.warn('snapshot seguidores:',e);return false;}
+}
+
+// Garante que o snapshot de HOJE existe ao abrir o app, e agenda captura à meia-noite.
+function scheduleFollowerSnapshot(){
+  const haveToday=()=> (state.config.igHistory||[]).some(x=>x&&x.date===localDate(0));
+  // Captura ao abrir, se ainda não houver registro de hoje
+  if(!haveToday()){captureFollowerSnapshot({silent:true,render:false});}
+  // Agenda a próxima captura logo após a virada do dia (00:01 local)
+  const now=new Date();
+  const next=new Date(now);
+  next.setHours(24,1,0,0); // 00:01 do dia seguinte
+  const ms=next-now;
+  setTimeout(function tick(){
+    captureFollowerSnapshot({silent:true});
+    // reagenda para a próxima meia-noite (24h depois)
+    setTimeout(tick,24*60*60*1000);
+  },ms);
+}
 
 function changePassword(){
   const np = document.getElementById('new-pass').value;
