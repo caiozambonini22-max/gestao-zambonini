@@ -207,22 +207,34 @@ const stInfo = id => OS.find(s=>s.id===id)||OS[0];
 const nfInfo = id => NS.find(s=>s.id===id)||NS[0];
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-function payFee(pay,maqs){
+function payFee(pay,maqs,fallbackBase){
   if(!pay||pay.type==='dinheiro'||pay.type==='pix')return 0;
   const m=maqs.find(x=>x.id===pay.maquininhaId);if(!m)return 0;
   const md=pay.mode||'presencial';const inst=Number(pay.installments||1);
-  return(Number(pay.amount||0)*(m.rates[md]&&m.rates[md][inst]?m.rates[md][inst]:0))/100;
+  // Se valor não preenchido, usa base de fallback (total do pedido) — útil quando há só uma forma de pagamento
+  const base=Number(pay.amount||0)>0?Number(pay.amount):Number(fallbackBase||0);
+  return(base*(m.rates[md]&&m.rates[md][inst]?m.rates[md][inst]:0))/100;
+}
+// Soma taxas de todas as formas. Fallback (total do pedido) só é aplicado quando há UMA única forma
+// de pagamento — em pagamento misto, cada forma precisa do valor preenchido para a divisão ser correta.
+function sumFees(payments,maqs,orderTotal){
+  const ps=payments||[];
+  const fb=ps.length===1?orderTotal:0;
+  return ps.reduce((a,p)=>a+payFee(p,maqs,fb),0);
 }
 function getCost(prod,si){if(!prod)return 0;if(prod.costMode==='avg'&&si&&Number(si.avgCost)>0)return Number(si.avgCost);return Number(prod.costPrice||0);}
 function calcM(order){
+  if(!order)return{fee:0,rev:0,profit:0,roi:0,mot:0,cor:0,upsell:0,cost:0};
   const mot=Number(order.motoboyCost||0);const cor=Number(order.correiosCost||0);
-  const fee=(order.payments||[]).reduce((a,p)=>a+payFee(p,state.maqs),0);
   const upsell=(order.upsells||[]).reduce((s,u)=>s+Number(u.price||0),0);
 
   // Soma todos os itens (inclui brindes no custo, exclui na receita)
   const items=order.items&&order.items.length>0?order.items:[{productId:order.productId,quantity:order.quantity||1,salePrice:order.salePrice||0,isGift:false}];
   const rev=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0)+upsell-Number(order.discount||0);
   const cost=items.reduce((a,it)=>{const p=state.prods.find(x=>x.id===it.productId);const si=state.stock.find(s=>s.productId===it.productId);return a+getCost(p,si)*Number(it.quantity||1);},0);
+
+  // Taxa de maquininha: base de fallback é a receita do pedido (quando há só uma forma de pagamento)
+  const fee=sumFees(order.payments,state.maqs,rev);
 
   const total=cost+mot+cor+fee;
   const profit=rev-total;const roi=total>0?(profit/total)*100:0;
@@ -408,6 +420,9 @@ async function loadAll(){
             if(m.rates&&!m.rates.presencial){const p={},l={};for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}return {...m,rates:{presencial:p,link:l}};}
             return m;
           });
+        }else if(Array.isArray(v)){
+          // Remove entradas null/inválidas que poderiam quebrar o render (ex: pedido corrompido)
+          state[k]=v.filter(x=>x!==null&&x!==undefined&&typeof x==='object');
         }else{state[k]=v;}
       }
     }catch{}
@@ -441,6 +456,7 @@ async function loadAll(){
         return;
       }
       if(k==='maqs'){state[k]=v.map(m=>{if(m.rates&&!m.rates.presencial){const p={},l={};for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}return {...m,rates:{presencial:p,link:l}};}return m;});}
+      else if(Array.isArray(v)){state[k]=v.filter(x=>x!==null&&x!==undefined&&typeof x==='object');}
       else{state[k]=v;}
       try{localStorage.setItem('zb_cache_'+k,JSON.stringify(state[k]));}catch{}
       updated=true;
@@ -847,7 +863,7 @@ function showOrderModal(){
   const el=document.getElementById('main-content');
   window._formScroll=window.scrollY||window.pageYOffset||0;
   if(el){el.innerHTML=renderOrderModal();}
-  setTimeout(()=>{window.scrollTo(0,window._formScroll||0);initCityAutocompletes();},0);
+  setTimeout(()=>{window.scrollTo(0,window._formScroll||0);initCityAutocompletes();updateOrderSummary();},0);
 }
 
 function renderOrderModal(){
@@ -855,8 +871,9 @@ function renderOrderModal(){
   const prod=state.prods.find(p=>p.id===o.productId);
   const si=state.stock?state.stock.find(s=>s.productId===o.productId):null;
   const cp=getCost(prod,si);
-  // Multi-item support
-  const itemsTotal=(o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}]).reduce((a,item)=>a+Number(item.salePrice||0)*Number(item.quantity||1),0);
+  // Multi-item support — resumo calcula RECEITA só de itens pagos e CUSTO de TODOS os itens (inclui brindes)
+  const _items=(o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}]);
+  const itemsTotal=_items.reduce((a,item)=>item.isGift?a:a+Number(item.salePrice||0)*Number(item.quantity||1),0);
   const st=itemsTotal;
   const ut=(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0);
   const baseRev=st+ut;
@@ -864,9 +881,9 @@ function renderOrderModal(){
   if(o.discountType==='pct'&&o.discountVal){discountAmt=baseRev*(Number(o.discountVal)/100);}
   else{discountAmt=Number(o.discount||o.discountVal||0);}
   const rev=baseRev-discountAmt;
-  const ctotal=cp*Number(o.quantity||1);
+  const ctotal=_items.reduce((a,item)=>{const _p=state.prods.find(x=>x.id===item.productId);const _si=state.stock?state.stock.find(s=>s.productId===item.productId):null;return a+getCost(_p,_si)*Number(item.quantity||1);},0);
   const mot=Number(o.motoboyCost||0)+Number(o.fuelCost||0)+Number(o.tollCost||0);const cor=Number(o.correiosCost||0);
-  const fee=(o.payments||[]).reduce((a,p)=>a+payFee(p,state.maqs),0);
+  const fee=sumFees(o.payments,state.maqs,rev);
   const td=ctotal+mot+cor+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
 
   let prodOptions=`<option value="">-- Selecione --</option>`;
@@ -881,7 +898,7 @@ function renderOrderModal(){
   let paysHTML='';
   (o.payments||[]).forEach((pay,idx)=>{
     const m=state.maqs.find(x=>x.id===pay.maquininhaId);const md=pay.mode||'presencial';const inst=Number(pay.installments||1);
-    const feeP=payFee(pay,state.maqs);
+    const feeP=payFee(pay,state.maqs,(o.payments||[]).length===1?rev:0);
     let maqOpts='';state.maqs.forEach(x=>{maqOpts+=`<option value="${x.id}" ${pay.maquininhaId===x.id?'selected':''}>${x.name}</option>`;});
     let parcOpts='';for(let n=1;n<=18;n++){const r=m&&m.rates[md]?m.rates[md][n]||0:0;parcOpts+=`<option value="${n}" ${inst===n?'selected':''}>${n}x ${fmtPct(r)}</option>`;}
     paysHTML+=`<div style="display:grid;grid-template-columns:110px ${pay.type==='cartao'?'150px 90px 160px':''} 1fr ${(o.payments||[]).length>1?'32px':''};gap:8px;align-items:end;background:var(--sf3);border:1px solid var(--bd);border-radius:7px;padding:10px;margin-bottom:7px">
@@ -1284,6 +1301,7 @@ function ufProdChange(v){
   if(prod&&prod.salePrice&&priceEl&&!priceEl.value){priceEl.value=prod.salePrice;}
 }
 function addUpsell(){
+  if(!orderModalData)return;
   const pid=window._ufProdVal||'';const price=document.getElementById('uf-price').value;if(!price)return;
   const cn=document.getElementById('uf-custom');const customName=cn?cn.value:'';
   const varSel=document.getElementById('uf-var');const varVal=varSel?varSel.value:'';
@@ -1302,12 +1320,11 @@ function addUpsell(){
   // Reset search select
   const inp=document.getElementById('ss-uf-prod');if(inp)inp.value='';
 }
-  if(!orderModalData.upsells)orderModalData.upsells=[];
 function removeUpsell(id){if(!orderModalData)return;orderModalData.upsells=(orderModalData.upsells||[]).filter(u=>u.id!==id);showOrderModal();}
-function changePayType(idx,type){if(!orderModalData)return;const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments[idx]=Object.assign({},orderModalData.payments[idx],{type,maquininhaId:fmq,mode:'presencial',installments:1});showOrderModal();}
-function changePayField(idx,k,v){if(!orderModalData)return;orderModalData.payments[idx][k]=v;showOrderModal();}
-function addPay(){if(!orderModalData)return;const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments.push({id:uid(),type:'pix',maquininhaId:fmq,mode:'presencial',installments:1,amount:''});showOrderModal();}
-function removePay(idx){if(!orderModalData)return;orderModalData.payments=orderModalData.payments.filter((_,i)=>i!==idx);showOrderModal();}
+function changePayType(idx,type){if(!orderModalData)return;syncItemsFromDOM();const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments[idx]=Object.assign({},orderModalData.payments[idx],{type,maquininhaId:fmq,mode:'presencial',installments:1});showOrderModal();}
+function changePayField(idx,k,v){if(!orderModalData)return;syncItemsFromDOM();orderModalData.payments[idx][k]=v;showOrderModal();}
+function addPay(){if(!orderModalData)return;syncItemsFromDOM();const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments.push({id:uid(),type:'pix',maquininhaId:fmq,mode:'presencial',installments:1,amount:''});showOrderModal();}
+function removePay(idx){if(!orderModalData)return;syncItemsFromDOM();orderModalData.payments=orderModalData.payments.filter((_,i)=>i!==idx);showOrderModal();}
 function toggleAct(k){
   if(!orderModalData)return;
   if(!orderModalData.postActions)orderModalData.postActions={};
@@ -2900,7 +2917,7 @@ function updateOrderSummary(){
   });
   const ctotal=custoItens.reduce((a,c)=>a+c,0);
   const mot=Number(o.motoboyCost||0);const cor=Number(o.correiosCost||0);
-  const fee=(o.payments||[]).reduce((a,p)=>a+payFee(p,state.maqs),0);
+  const fee=sumFees(o.payments,state.maqs,rev);
   const td=ctotal+mot+cor+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
   const s=document.getElementById('order-summary');
   if(!s)return;
