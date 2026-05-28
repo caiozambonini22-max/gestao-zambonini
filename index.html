@@ -182,7 +182,7 @@ const DEF_MAQ=[{id:'cielo',name:'Cielo',color:'#0051A5',rates:buildRates(2.99,.3
 const DEF_CH=[{id:'instagram',label:'Instagram'},{id:'whatsapp',label:'WhatsApp'},{id:'loja',label:'Loja Fisica'},{id:'site',label:'Site'},{id:'outro',label:'Outro'}];
 const OS=[{id:'em_aberto',label:'Em Aberto',c:'#f97316'},{id:'aprovado',label:'Aprovado',c:'#22c55e'},{id:'preparando',label:'Preparando',c:'#3b82f6'},{id:'faturado',label:'Faturado',c:'#8b5cf6'},{id:'pronto',label:'Pronto Envio',c:'#f59e0b'},{id:'enviado',label:'Enviado',c:'#06b6d4'},{id:'entregue',label:'Entregue',c:'#22c55e'},{id:'cancelado',label:'Cancelado',c:'#ef4444'}];
 const NS=[{id:'pendente',label:'Pendente',c:'#f97316'},{id:'emitida',label:'Emitida',c:'#22c55e'},{id:'cancelada',label:'Cancelada',c:'#ef4444'},{id:'denegada',label:'Denegada',c:'#8b5cf6'}];
-const DLV=[{id:'retirada',label:'Retirada',icon:'🏪'},{id:'sedex',label:'SEDEX',icon:'📦'},{id:'sedex10',label:'SEDEX 10',icon:'📦'},{id:'pac',label:'PAC',icon:'📬'},{id:'pac_mini',label:'PAC Mini',icon:'📬'},{id:'motoboy',label:'Motoboy',icon:'🛵'},{id:'jadlog',label:'Jadlog',icon:'🚚'},{id:'transportadora',label:'Transportadora',icon:'🚛'},{id:'outro',label:'Outro',icon:'📮'}];
+const DLV=[{id:'retirada',label:'Retirada na Loja',icon:'🏪'},{id:'sedex',label:'SEDEX',icon:'📦'},{id:'sedex10',label:'SEDEX 10',icon:'📦'},{id:'pac',label:'PAC',icon:'📬'},{id:'pac_mini',label:'PAC Mini',icon:'📬'},{id:'motoboy',label:'Motoboy',icon:'🛵'},{id:'entrega_propria',label:'Entrega Própria',icon:'🙋'},{id:'uber_flash',label:'Uber Flash',icon:'🚗'},{id:'jadlog',label:'Jadlog',icon:'🚚'},{id:'transportadora',label:'Transportadora',icon:'🚛'},{id:'outro',label:'Outro',icon:'📮'}];
 
 // ============ STATE ============
 let state = {
@@ -582,9 +582,16 @@ function renderDashboard(){
   const cityMap={};
   filtered.forEach(o=>{
     if(!o.city)return;const k=o.city.trim();
-    if(!cityMap[k])cityMap[k]={count:0,rev:0,motoboy:0};
+    if(!cityMap[k])cityMap[k]={count:0,rev:0,motoboy:0,orders:[],byMethod:{}};
     cityMap[k].count++;cityMap[k].rev+=calcM(o).rev;
     if(o.deliveryMethod==='motoboy')cityMap[k].motoboy++;
+    // Guarda o pedido todo (pra expansão) e agrega por método de entrega
+    cityMap[k].orders.push(o);
+    // Identifica método efetivo: se isPresencial=true, conta como retirada na loja
+    const method=o.isPresencial?'retirada':(o.deliveryMethod||'outro');
+    if(!cityMap[k].byMethod[method])cityMap[k].byMethod[method]={count:0,rev:0};
+    cityMap[k].byMethod[method].count++;
+    cityMap[k].byMethod[method].rev+=calcM(o).rev;
   });
   const topCities=Object.entries(cityMap).sort((a,b)=>b[1].rev-a[1].rev).slice(0,15);
   const maxCR=topCities.length>0?topCities[0][1].rev:1;
@@ -722,11 +729,35 @@ function renderDashboard(){
     }).join('');
 
   let citiesHTML='';
+  if(!window._cityExpanded)window._cityExpanded={};
   if(topCities.length===0){citiesHTML='<div class="empty"><div class="empty-ic">📍</div><p>Sem dados no periodo</p></div>';}
   else{topCities.forEach(([city,data],i)=>{
     const pct=maxCR>0?(data.rev/maxCR)*100:0;
     const isSameDay=(state.deliveryCities||[]).some(dc=>dc.name.toLowerCase().trim()===city.toLowerCase().trim());
-    citiesHTML+=`<div class="hbar"><div class="hbar-lbl">${isSameDay?'<span style="color:var(--gr);margin-right:3px;font-size:9px">●</span>':''}${esc(city)}${data.motoboy>0?`<span style="color:var(--or);font-size:9px;margin-left:3px">🛵${data.motoboy}</span>`:''}</div><div class="hbar-bg"><div class="hbar-fill" style="width:${pct}%;opacity:${Math.max(.4,1-i*.04)}"></div></div><div class="hbar-val">${fmtBRL(data.rev)}</div></div>`;
+    const expanded=!!window._cityExpanded[city];
+    const caret=`<span style="display:inline-block;width:10px;color:var(--txd);font-size:9px;${expanded?'transform:rotate(90deg)':''}">▶</span>`;
+    citiesHTML+=`<div class="hbar" onclick="window._cityExpanded['${esc(city).replace(/'/g,"\\'")}']=!window._cityExpanded['${esc(city).replace(/'/g,"\\'")}'];render()" style="cursor:pointer">
+      <div class="hbar-lbl">${caret} ${isSameDay?'<span style="color:var(--gr);margin-right:3px;font-size:9px">●</span>':''}${esc(city)}${data.motoboy>0?`<span style="color:var(--or);font-size:9px;margin-left:3px">🛵${data.motoboy}</span>`:''}</div>
+      <div class="hbar-bg"><div class="hbar-fill" style="width:${pct}%;opacity:${Math.max(.4,1-i*.04)}"></div></div>
+      <div class="hbar-val">${fmtBRL(data.rev)}</div>
+    </div>`;
+    // Detalhamento por método de entrega quando expandida
+    if(expanded){
+      const methods=Object.entries(data.byMethod).sort((a,b)=>b[1].count-a[1].count);
+      let methodsHTML='';
+      methods.forEach(([mid,md])=>{
+        const dlvInfo=DLV.find(x=>x.id===mid)||{icon:'❓',label:mid};
+        methodsHTML+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px 5px 22px;font-size:11px;background:rgba(249,115,22,.03);border-left:2px solid rgba(249,115,22,.2)">
+          <div style="display:flex;align-items:center;gap:6px;color:var(--txm)">
+            <span style="font-size:13px">${dlvInfo.icon}</span>
+            <span>${esc(dlvInfo.label)}</span>
+            <span style="color:var(--txd);font-size:10px">· ${md.count} pedido${md.count===1?'':'s'}</span>
+          </div>
+          <span style="color:var(--or);font-weight:600;font-size:10px">${fmtBRL(md.rev)}</span>
+        </div>`;
+      });
+      citiesHTML+=`<div style="margin-bottom:6px">${methodsHTML}</div>`;
+    }
   });}
 
   let chHTML='';
@@ -783,7 +814,7 @@ function renderDashboard(){
   </div>
   ${presOrders.length>0?`<div style="padding:12px 16px;background:var(--ordim);border:1px solid var(--bdb);border-radius:8px;margin-bottom:16px;display:flex;gap:12px;align-items:center"><span style="font-size:18px">🏪</span><div><div style="font-weight:700">Loja Fisica: <span style="color:var(--or)">${presOrders.length} pedidos</span></div><div style="font-size:11px;color:var(--txm)">${fmtBRL(presOrders.reduce((a,o)=>a+calcM(o).rev,0))} — ${fmtPct((presOrders.length/filtered.length)*100)} do total</div></div></div>`:''}
   <div class="g2" style="margin-bottom:16px">
-    <div class="card"><div class="ct">Top 15 Cidades</div><div style="margin-top:10px">${citiesHTML}</div></div>
+    <div class="card"><div class="ct">Top 15 Cidades</div><div style="font-size:9px;color:var(--txd);margin-top:-4px">clique na cidade para ver detalhes por tipo de entrega</div><div style="margin-top:10px">${citiesHTML}</div></div>
     <div style="display:flex;flex-direction:column;gap:14px">
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="ct">Gastos com Anúncios</div><div class="ads-pill"><div class="ads-dot"></div>Meta Ads</div></div>
@@ -1267,7 +1298,10 @@ function renderOrderModal(){
       <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end">
         <div class="field"><label>Endereco / Cliente</label><textarea id="wa-text" rows="3" placeholder="Nome, telefone, CEP, rua..." style="resize:vertical;font-family:monospace;font-size:11px;background:var(--sf3);border:1.5px solid var(--or);border-radius:7px;padding:8px"></textarea></div>
         <div class="field"><label>Pedido</label><textarea id="wa-order" rows="3" placeholder="1x X11 Medio - Prata&#10;Total: R$297,00" style="resize:vertical;font-family:monospace;font-size:11px;background:var(--sf3);border:1.5px solid var(--or);border-radius:7px;padding:8px"></textarea></div>
-        <button class="btn bp" style="padding:10px 18px;font-size:13px;font-weight:700;align-self:flex-end" id="parse-btn" onclick="parseWA()">📋 Preencher</button>
+        <div style="display:flex;flex-direction:column;gap:6px;align-self:flex-end">
+          <button class="btn bp" style="padding:10px 18px;font-size:13px;font-weight:700" id="parse-btn" onclick="parseWA()">📋 Preencher</button>
+          <button class="btn bg2 sm" style="padding:6px 12px;font-size:11px" onclick="clearOrderFields()" title="Apaga os dados do cliente para começar do zero">🧹 Limpar campos</button>
+        </div>
       </div>
     </div>
 
@@ -1759,6 +1793,27 @@ function fillFromClient(id){
   const o=state.orders.find(x=>x.id===id);if(!o||!orderModalData)return;
   ['clientName','cpfCnpj','phone','email','street','streetNum','complement','bairro','cep','city','state'].forEach(k=>{if(o[k])orderModalData[k]=o[k];});
   showOrderModal();
+}
+
+// Limpa os campos do cliente/endereço para começar do zero (cliente apressado que manda dados soltos)
+function clearOrderFields(){
+  if(!orderModalData)return;
+  if(!confirm('Limpar todos os campos do cliente, endereço e os textos colados? Os itens do pedido continuam.'))return;
+  // Limpa textareas do WhatsApp
+  const wt=document.getElementById('wa-text');if(wt)wt.value='';
+  const wo=document.getElementById('wa-order');if(wo)wo.value='';
+  // Limpa dados do cliente e endereço no estado
+  ['clientName','cpfCnpj','phone','email','tipoPessoa','contribuinte','inscEstadual','street','streetNum','complement','bairro','cep','city','state','diffDeliveryAddr','deliveryStreet','deliveryStreetNum','deliveryComplement','deliveryBairro','deliveryCep','deliveryCity','deliveryState','notes'].forEach(k=>{
+    if(k==='tipoPessoa')orderModalData[k]='fisica';
+    else if(k==='contribuinte')orderModalData[k]='nao';
+    else if(k==='diffDeliveryAddr')orderModalData[k]=false;
+    else orderModalData[k]='';
+  });
+  // Remove avisos de CEP
+  orderModalData._cepWarning=null;
+  orderModalData._cepDelWarning=null;
+  showOrderModal();
+  showToast('🧹 Campos limpos. Preencha manualmente.','gr');
 }
 
 function parseWA(){
