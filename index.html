@@ -1006,13 +1006,23 @@ function openDashSummary(){
   const old=document.querySelector('.dash-summary-overlay');if(old)old.remove();
   const ov=document.createElement('div');
   ov.className='overlay dash-summary-overlay';
-  // Linha auxiliar
-  const row=(emoji,label,value,color,sub)=>`<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:11px 14px;border-bottom:1px solid var(--bd)">
-    <div style="display:flex;align-items:center;gap:10px;flex:1"><span style="font-size:18px;width:24px;text-align:center">${emoji}</span><div><div style="font-size:11px;color:var(--txd);text-transform:uppercase;letter-spacing:.5px">${label}</div>${sub?`<div style="font-size:10px;color:var(--txd);margin-top:1px">${sub}</div>`:''}</div></div>
-    <div style="font-size:16px;font-weight:700;color:${color||'var(--txm)'};text-align:right;white-space:nowrap">${value}</div>
+  // Card grande de destaque (4 principais no topo, em grid 2x2)
+  const bigCard=(emoji,label,value,color,sub)=>`<div style="background:var(--sf3);border:1px solid var(--bd);border-radius:10px;padding:14px 16px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:16px">${emoji}</span><span style="font-size:10px;color:var(--txd);text-transform:uppercase;letter-spacing:.6px;font-weight:600">${label}</span></div>
+    <div style="font-size:22px;font-weight:800;color:${color||'var(--txm)'};line-height:1.1">${value}</div>
+    ${sub?`<div style="font-size:10px;color:var(--txd);margin-top:4px">${sub}</div>`:''}
   </div>`;
+  // Linha compacta (secundárias)
+  const smallRow=(emoji,label,value,color,sub)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid var(--bd)">
+    <div style="display:flex;align-items:center;gap:8px;flex:1"><span style="font-size:14px;width:20px;text-align:center;opacity:.8">${emoji}</span><div><div style="font-size:11px;color:var(--txm)">${label}</div>${sub?`<div style="font-size:9px;color:var(--txd)">${sub}</div>`:''}</div></div>
+    <div style="font-size:13px;font-weight:600;color:${color||'var(--txm)'};text-align:right;white-space:nowrap">${value}</div>
+  </div>`;
+  // ROAS sempre presente; mostra "—" quando inválido (mesma regra do anúncio)
+  const roasDisplay=roas!==null?roas.toFixed(1)+'x':'—';
+  const roasColor=roas===null?'var(--txd)':(roas>=2?'var(--gr)':roas>=1?'var(--or)':'var(--rd)');
+  const roasSub=roas!==null?'cada R$1 virou '+fmtBRL(roas):'só hoje / mês atual';
 
-  ov.innerHTML=`<div class="modal" style="max-width:540px">
+  ov.innerHTML=`<div class="modal" style="max-width:680px;width:92vw">
     <div class="modal-header" style="padding-bottom:10px;border-bottom:1px solid var(--bd)">
       <div>
         <h2 style="margin:0">📋 Resumo</h2>
@@ -1020,19 +1030,24 @@ function openDashSummary(){
       </div>
       <button class="btn bg2 sm" onclick="this.closest('.overlay').remove()">×</button>
     </div>
-    <div class="modal-body" style="padding:0">
-      ${row('🛒','Vendas feitas',filtered.length+' pedido'+(filtered.length===1?'':'s'),'var(--bl)',filtered.length>0?'ticket médio '+fmtBRL(ticket):null)}
-      ${row('⌚','Smartwatches vendidos',swCount+' unidades','#a855f7')}
-      ${row('💰','Faturamento total',fmtBRL(totRev),'var(--or)')}
-      ${row('📦','Custo dos produtos',fmtBRL(totProdCost),'var(--rd)','itens + upsells + brindes')}
-      ${row('🛵','Frete (custo)',fmtBRL(totFrete),'var(--rd)','motoboy + correios')}
-      ${row('🎁','Brindes',brindesUn>0?(fmtBRL(totBrindes)+' · '+brindesUn+' un.'):'R$ 0,00','var(--rd)','já incluso no custo dos produtos')}
-      ${row('💳','Taxas maquininha',fmtBRL(totFee),'var(--rd)')}
-      ${row('📢','Investido em anúncios',adValid?fmtBRL(adSpend):'—','var(--bl)',adValid?(cac!==null?'CAC '+fmtBRL(cac)+' por venda':null):'só hoje / mês atual')}
-      ${row('💸','Custo total do período',fmtBRL(custoTotal),'var(--rd)',filtered.length>0?'média '+fmtBRL(custoPorVenda)+' por venda':null)}
-      ${row('✅','Lucro líquido',fmtBRL(totProfit),totProfit>=0?'var(--gr)':'var(--rd)',fmtPct(margem)+' margem · bruta '+fmtPct(margemBruta))}
-      ${roas!==null?row('📈','ROAS',roas.toFixed(1)+'x',roas>=2?'var(--gr)':roas>=1?'var(--or)':'var(--rd)','cada R$1 em anúncio virou '+fmtBRL(roas)):''}
-      ${(dashPeriod==='day'||dashPeriod==='week'||dashPeriod==='month'||dashPeriod==='year')?row('📱','Seguidores Instagram',igDelta===null?'—':((igDelta>=0?'+':'')+igDelta+' '+igPeriodoLabel),igDelta===null?'var(--txd)':igDelta>0?'var(--gr)':igDelta<0?'var(--rd)':'var(--txm)','total atual: '+(igLatest?igLatest.toLocaleString('pt-BR'):'—')):''}
+    <div class="modal-body" style="padding:14px">
+      <!-- 4 PRINCIPAIS EM DESTAQUE -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
+        ${bigCard('💰','Faturamento',fmtBRL(totRev),'var(--or)',filtered.length>0?filtered.length+' pedido'+(filtered.length===1?'':'s')+' · ticket '+fmtBRL(ticket):null)}
+        ${bigCard('⌚','Smartwatches vendidos',swCount+' un.','#a855f7',null)}
+        ${bigCard('📈','ROAS',roasDisplay,roasColor,roasSub)}
+        ${bigCard('✅','Lucro líquido',fmtBRL(totProfit),totProfit>=0?'var(--gr)':'var(--rd)',fmtPct(margem)+' margem · bruta '+fmtPct(margemBruta))}
+      </div>
+      <!-- DETALHAMENTO MENOR -->
+      <div style="background:var(--sf2);border:1px solid var(--bd);border-radius:10px;overflow:hidden">
+        ${smallRow('📦','Custo dos produtos',fmtBRL(totProdCost),'var(--rd)','itens + upsells + brindes')}
+        ${smallRow('🛵','Frete (custo)',fmtBRL(totFrete),'var(--rd)','motoboy + correios')}
+        ${smallRow('🎁','Brindes',brindesUn>0?(fmtBRL(totBrindes)+' · '+brindesUn+' un.'):'R$ 0,00','var(--rd)','incluso no custo dos produtos')}
+        ${smallRow('💳','Taxas maquininha',fmtBRL(totFee),'var(--rd)',null)}
+        ${smallRow('📢','Investido em anúncios',adValid?fmtBRL(adSpend):'—','var(--bl)',adValid?(cac!==null?'CAC '+fmtBRL(cac)+' por venda':null):'só hoje / mês atual')}
+        ${smallRow('💸','Custo total do período',fmtBRL(custoTotal),'var(--rd)',filtered.length>0?'média '+fmtBRL(custoPorVenda)+' por venda':null)}
+        ${(dashPeriod==='day'||dashPeriod==='week'||dashPeriod==='month'||dashPeriod==='year')?smallRow('📱','Seguidores Instagram',igDelta===null?'—':((igDelta>=0?'+':'')+igDelta+' '+igPeriodoLabel),igDelta===null?'var(--txd)':igDelta>0?'var(--gr)':igDelta<0?'var(--rd)':'var(--txm)','total atual: '+(igLatest?igLatest.toLocaleString('pt-BR'):'—')):''}
+      </div>
     </div>
     <div class="modal-footer"><button class="btn bp" onclick="this.closest('.overlay').remove()">Fechar</button></div>
   </div>`;
@@ -1252,7 +1267,7 @@ function renderOrderModal(){
       <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end">
         <div class="field"><label>Endereco / Cliente</label><textarea id="wa-text" rows="3" placeholder="Nome, telefone, CEP, rua..." style="resize:vertical;font-family:monospace;font-size:11px;background:var(--sf3);border:1.5px solid var(--or);border-radius:7px;padding:8px"></textarea></div>
         <div class="field"><label>Pedido</label><textarea id="wa-order" rows="3" placeholder="1x X11 Medio - Prata&#10;Total: R$297,00" style="resize:vertical;font-family:monospace;font-size:11px;background:var(--sf3);border:1.5px solid var(--or);border-radius:7px;padding:8px"></textarea></div>
-        <button class="btn bp" style="padding:10px 18px;font-size:13px;font-weight:700;align-self:flex-end" id="parse-btn" onclick="parseWA()">Interpretar com IA</button>
+        <button class="btn bp" style="padding:10px 18px;font-size:13px;font-weight:700;align-self:flex-end" id="parse-btn" onclick="parseWA()">📋 Preencher</button>
       </div>
     </div>
 
@@ -1747,27 +1762,98 @@ function fillFromClient(id){
 }
 
 function parseWA(){
-  const wt=document.getElementById('wa-text').value;
-  const wo=document.getElementById('wa-order').value;
-  if(!wt&&!wo)return;
-  const btn=document.getElementById('parse-btn');if(btn){btn.disabled=true;btn.textContent='Interpretando com IA...';}
-  const prompt='Extraia dados de pedido smartwatch WhatsApp. Endereco: '+wt+' Pedido: '+wo+' Retorne APENAS JSON: {clientName,cpfCnpj,phone,email,street,streetNum,complement,bairro,cep,city,state,salePrice,quantity,paymentType,notes}. phone/cpfCnpj/cep so digitos. state 2 letras maiusculas. salePrice numero com ponto. paymentType: pix dinheiro ou cartao.';
-  fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,messages:[{role:'user',content:prompt}]})})
-  .then(r=>r.json()).then(d=>{
-    const blk=(d.content||[]).find(b=>b.type==='text');const text=blk?blk.text:'';
-    const bk=String.fromCharCode(96);const clean=text.split(bk+bk+bk+'json').join('').split(bk+bk+bk).join('').trim();
-    const p=JSON.parse(clean);
-    if(!orderModalData)return;
-    ['clientName','cpfCnpj','phone','email','street','streetNum','complement','bairro','cep','city','state','notes'].forEach(k=>{if(p[k])orderModalData[k]=p[k];});
-    if(p.salePrice)orderModalData.salePrice=p.salePrice;
-    if(p.quantity)orderModalData.quantity=p.quantity;
-    if(p.paymentType){const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments=[{id:uid(),type:p.paymentType,maquininhaId:fmq,mode:'presencial',installments:1,amount:''}];}
-    showOrderModal();showDadosTab();
-    // ── Valida CEP no ViaCEP e completa campos faltantes ──
-    if(p.cep){
-      validateAndFillCEP(p.cep);
+  const wt=(document.getElementById('wa-text')||{}).value||'';
+  const wo=(document.getElementById('wa-order')||{}).value||'';
+  if(!wt&&!wo){alert('Cole o endereço/cliente ou o pedido nos campos.');return;}
+  if(!orderModalData)return;
+
+  const txt=wt+'\n'+wo;
+  const p={};
+
+  // Helper: pega valor após um rótulo (Nome:, Endereço:, etc) na mesma linha
+  function afterLabel(re){
+    const m=txt.match(re);
+    if(!m)return '';
+    return (m[1]||'').replace(/^[\s:☑✔✓\-—•·.]+/,'').replace(/[☑✔✓]/g,'').trim();
+  }
+  // 1. EMAIL — qualquer coisa com @
+  const em=txt.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  if(em)p.email=em[0];
+  // 2. CPF ou CNPJ — XXX.XXX.XXX-XX, XX.XXX.XXX/XXXX-XX, ou sequência longa de dígitos
+  const cpfM=txt.match(/(\d{3}\.\d{3}\.\d{3}-?\d{2})/);
+  const cnpjM=txt.match(/(\d{2}\.\d{3}\.\d{3}\/?\d{4}-?\d{2})/);
+  if(cnpjM)p.cpfCnpj=cnpjM[1].replace(/\D/g,'');
+  else if(cpfM)p.cpfCnpj=cpfM[1].replace(/\D/g,'');
+  // 3. CEP — XXXXX-XXX ou 8 dígitos isolados perto de "CEP"
+  const cepM=txt.match(/(?:CEP[:\s]*)?(\d{5}-?\d{3})\b/i);
+  if(cepM)p.cep=cepM[1].replace(/\D/g,'');
+  // 4. CELULAR — (XX) 9XXXX-XXXX ou variações
+  const phM=txt.match(/(\(?\d{2}\)?\s*9?\d{4,5}[-.\s]?\d{4})/);
+  if(phM){
+    const dig=phM[1].replace(/\D/g,'');
+    // Evita confundir com CPF/CNPJ/CEP
+    if(dig.length===10||dig.length===11)p.phone=dig;
+  }
+  // 5. UF — duas letras maiúsculas isoladas (preferência: depois de "/" ou "Estado")
+  const ufM=txt.match(/(?:Estado[:\s]*|\/\s*)([A-Z]{2})\b/)||txt.match(/\b([A-Z]{2})\b\s*(?:\d{5}|$|,)/m);
+  if(ufM)p.state=ufM[1].toUpperCase();
+
+  // 6. NOME — "Nome: X" ou primeira linha sem dígitos antes de uns outros campos
+  p.clientName=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Nome[:\s]+([^\n]+)/i);
+  // 7. ENDEREÇO / RUA — "Endereço: X" ou "Rua: X"
+  let endereco=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*(?:Endere[çc]o|Rua)[:\s]+([^\n]+)/i);
+  if(endereco){
+    // Tenta separar "Rua X, 123, complemento"
+    const partes=endereco.split(',').map(s=>s.trim());
+    p.street=partes[0]||'';
+    // Procura número (1-6 dígitos no segundo pedaço)
+    if(partes[1]){
+      const numM=partes[1].match(/^(\d{1,6}[A-Za-z]?)/);
+      if(numM){p.streetNum=numM[1];p.complement=partes[1].replace(numM[1],'').trim();}
+      else p.complement=partes[1];
     }
-  }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='Interpretar e Preencher';}alert('Erro ao interpretar. Tente novamente.');});
+    if(partes[2])p.complement=(p.complement?p.complement+' ':'')+partes[2];
+  }
+  // 8. NÚMERO (separado) — "Número: 123"
+  const numLbl=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*N[úu]mero[:\s]+([^\n]+)/i);
+  if(numLbl)p.streetNum=numLbl;
+  // 9. COMPLEMENTO / Ponto de referência
+  const compLbl=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*(?:Complemento|Ponto de refer[êe]ncia|Refer[êe]ncia)[:\s]+([^\n]+)/i);
+  if(compLbl)p.complement=(p.complement?p.complement+' — ':'')+compLbl;
+  // 10. BAIRRO
+  p.bairro=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Bairro[:\s]+([^\n]+)/i);
+  // 11. CIDADE
+  p.city=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Cidade[:\s]+([^\n]+)/i);
+  // 12. NOME alternativo (se não achou): primeira linha não vazia que tenha 2+ palavras de letras
+  if(!p.clientName){
+    const linhas=txt.split('\n').map(l=>l.trim()).filter(Boolean);
+    for(const l of linhas){
+      if(/^[A-Za-zÀ-ÿ\s]{4,}$/.test(l)&&l.split(/\s+/).length>=2){p.clientName=l;break;}
+    }
+  }
+  // 13. FORMA DE PAGAMENTO
+  const payL=afterLabel(/Forma de pagamento[:\s]+([^\n]+)/i).toLowerCase();
+  if(payL){
+    if(/pix/.test(payL))p.paymentType='pix';
+    else if(/cart[ãa]o|cr[ée]dito|d[ée]bito/.test(payL))p.paymentType='cartao';
+    else if(/dinheiro|esp[ée]cie/.test(payL))p.paymentType='dinheiro';
+  }
+
+  // ── Aplica no modal ──
+  ['clientName','cpfCnpj','phone','email','street','streetNum','complement','bairro','cep','city','state'].forEach(k=>{if(p[k])orderModalData[k]=p[k];});
+  if(p.paymentType){const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments=[{id:uid(),type:p.paymentType,maquininhaId:fmq,mode:'presencial',installments:1,amount:''}];}
+  showOrderModal();showDadosTab();
+
+  // Valida CEP no ViaCEP (grátis) e completa rua/bairro/cidade/UF que não vieram
+  if(p.cep){validateAndFillCEP(p.cep);}
+
+  // Feedback: quantos campos foram preenchidos
+  const camposPreenchidos=Object.keys(p).filter(k=>p[k]).length;
+  if(camposPreenchidos===0){
+    showToast('Nenhum dado reconhecido. Cole o texto com rótulos como "Nome:", "CEP:", "Email:"...','rd');
+  }else{
+    showToast(`✅ ${camposPreenchidos} campos preenchidos${p.cep?' · validando CEP...':''}`,'gr');
+  }
 }
 
 // Valida CEP no ViaCEP; completa rua/bairro/cidade/UF se vazios; mostra aviso se inválido.
@@ -3582,7 +3668,8 @@ function renderConfig(){
   let chHTML='';state.channels.forEach(c=>{chHTML+=`<div style="display:flex;align-items:center;gap:7px;background:var(--sf3);border:1px solid var(--bd);border-radius:6px;padding:5px 11px;font-size:12px">${esc(c.label)}<button style="background:none;border:none;cursor:pointer;color:var(--rd);font-size:13px;margin-left:auto" onclick="removeCh('${c.id}')">×</button></div>`;});
   let cityHTML='';(state.deliveryCities||[]).forEach(c=>{cityHTML+=`<div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:11px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:var(--gr);margin:3px">${esc(c.name)}<button style="background:none;border:none;cursor:pointer;color:var(--rd);font-size:13px" onclick="removeCity('${c.id}')">×</button></div>`;});
   let maqHTML='';state.maqs.forEach(maq=>{const r6=[1,2,3,6,12,18].map(n=>`<div style="background:var(--sf3);border:1px solid var(--bd);border-radius:4px;padding:2px 6px;font-size:10px"><span style="color:var(--txd)">${n}x </span><span style="color:var(--bl);font-weight:600">${fmtPct(maq.rates.presencial?maq.rates.presencial[n]||0:0)}</span></div>`).join('');maqHTML+=`<div style="border:1px solid var(--bd);border-radius:8px;padding:14px"><div style="height:3px;background:${maq.color};border-radius:3px 3px 0 0;margin:-14px -14px 10px"></div><div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><div style="width:32px;height:32px;border-radius:6px;background:${maq.color};display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:11px">${maq.name.slice(0,2).toUpperCase()}</div><div style="font-weight:700">${esc(maq.name)}</div></div><div style="font-size:10px;color:var(--txd);margin-bottom:4px">Presencial</div><div style="display:flex;gap:4px;flex-wrap:wrap">${r6}</div></div>`;});
-  return `<div class="g2" style="margin-bottom:22px"><div class="card"><div class="sl">Origens de Venda</div><div style="display:flex;gap:8px;margin-bottom:10px"><input id="new-ch" placeholder="Nova origem..." value="${esc(newChLabel)}" oninput="newChLabel=this.value" onkeydown="if(event.key==='Enter')addCh()" style="flex:1"><button class="btn bp" onclick="addCh()">+Add</button></div><div style="display:flex;flex-wrap:wrap;gap:7px">${chHTML}</div></div><div class="card"><div class="sl">Cidades Entrega no Dia</div><div style="font-size:11px;color:var(--txd);margin-bottom:10px">Cidades com Motoboy. Aparece no Dashboard com destaque.</div><div style="display:flex;gap:8px;margin-bottom:10px"><input id="new-city" placeholder="Ex: Ribeirao Preto" value="${esc(newCityLabel)}" oninput="newCityLabel=this.value" onkeydown="if(event.key==='Enter')addCity()" style="flex:1"><button class="btn bp" onclick="addCity()">+Add</button></div><div>${cityHTML||'<span style="font-size:11px;color:var(--txd)">Nenhuma cidade.</span>'}</div></div></div><div class="card"><div class="sl">Maquininhas</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">${maqHTML}</div></div>`;
+  return `<div class="g2" style="margin-bottom:22px"><div class="card"><div class="sl">Origens de Venda</div><div style="display:flex;gap:8px;margin-bottom:10px"><input id="new-ch" placeholder="Nova origem..." value="${esc(newChLabel)}" oninput="newChLabel=this.value" onkeydown="if(event.key==='Enter')addCh()" style="flex:1"><button class="btn bp" onclick="addCh()">+Add</button></div><div style="display:flex;flex-wrap:wrap;gap:7px">${chHTML}</div></div><div class="card"><div class="sl">Cidades Entrega no Dia</div><div style="font-size:11px;color:var(--txd);margin-bottom:10px">Cidades com Motoboy. Aparece no Dashboard com destaque.</div><div style="display:flex;gap:8px;margin-bottom:10px"><input id="new-city" placeholder="Ex: Ribeirao Preto" value="${esc(newCityLabel)}" oninput="newCityLabel=this.value" onkeydown="if(event.key==='Enter')addCity()" style="flex:1"><button class="btn bp" onclick="addCity()">+Add</button></div><div>${cityHTML||'<span style="font-size:11px;color:var(--txd)">Nenhuma cidade.</span>'}</div></div></div>
+  <div class="card"><div class="sl">Maquininhas</div><div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px">${maqHTML}</div></div>`;
 }
 function addCh(){const lbl=(document.getElementById('new-ch')||{value:newChLabel}).value.trim();if(!lbl)return;state.channels=[...state.channels,{id:uid(),label:lbl}];newChLabel='';save('channels');render();}
 function removeCh(id){if(state.channels.length<=1)return;state.channels=state.channels.filter(c=>c.id!==id);save('channels');render();}
