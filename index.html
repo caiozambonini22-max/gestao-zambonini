@@ -766,7 +766,8 @@ function renderDashboard(){
       <button class="ptab" style="padding:6px 11px" onclick="navMonth(1)" title="Próximo mês">›</button>
     </div>`:''}
     ${dashPeriod==='year'?`<select onchange="dashYear=Number(this.value);render()" style="width:95px">${years.map(y=>`<option ${y===dashYear?'selected':''}>${y}</option>`).join('')}</select>`:''}
-    <div style="margin-left:auto;font-size:12px;color:var(--txd)"><span style="color:var(--or);font-weight:700">${filtered.length}</span> pedidos em ${periodLabel}</div>
+    <button class="btn bp sm" style="margin-left:auto;padding:6px 14px;font-size:12px" onclick="openDashSummary()" title="Resumo compacto do período">📋 Resumo</button>
+    <div style="font-size:12px;color:var(--txd)"><span style="color:var(--or);font-weight:700">${filtered.length}</span> pedidos em ${periodLabel}</div>
   </div>
   <div class="g4" style="margin-bottom:16px">
     <div class="card" style="border-color:rgba(249,115,22,.25)"><div class="ct">Faturamento Total</div><div class="cv cv-or">${fmtBRL(totalRev)}</div><div class="cs">${periodLabel}</div></div>
@@ -912,6 +913,133 @@ function navMonth(delta){
   if(m<0){m=11;y--;}else if(m>11){m=0;y++;}
   dashMonth=m;dashYear=y;dashPeriod='month';render();
 }
+
+// ============ RESUMO RÁPIDO DO DASHBOARD ============
+// Abre um modal com a foto compacta do período atualmente selecionado.
+function openDashSummary(){
+  const filtered=getFiltered();
+  const allM=filtered.map(o=>calcM(o));
+  const totRev=allM.reduce((a,m)=>a+m.rev,0);
+  const totProfit=allM.reduce((a,m)=>a+m.profit,0);
+  const totProdCost=allM.reduce((a,m)=>a+m.cost+(m.upsellCost||0),0);
+  const totFrete=allM.reduce((a,m)=>a+m.mot+m.cor,0);
+  const totFee=allM.reduce((a,m)=>a+(m.fee||0),0);
+  // Smartwatches vendidos (usa mesma regra do dashboard: categoria/nome)
+  const catName=(catId)=>{const c=(state.categories||[]).find(x=>x.id===catId);return c?(c.name||'').toLowerCase():'';};
+  const isSW=(p)=>{if(!p)return false;const n=(p.name||'').toLowerCase();const cn=catName(p.categoryId);const alvo=/(smart\s?watch|smartwatch|rel[óo]gio|watch)/;return alvo.test(cn)||alvo.test(n);};
+  const swCount=filtered.reduce((tot,o)=>{
+    const items=o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,isGift:false}];
+    return tot+items.reduce((a,it)=>{if(it.isGift)return a;const p=state.prods.find(x=>x.id===it.productId);return isSW(p)?a+Number(it.quantity||1):a;},0);
+  },0);
+  // Brindes: soma do custo dos itens com isGift=true (não conta upsells)
+  let totBrindes=0,brindesUn=0;
+  filtered.forEach(o=>{
+    const items=o.items||[];
+    items.forEach(it=>{
+      if(!it.isGift)return;
+      const p=state.prods.find(x=>x.id===it.productId);
+      const si=state.stock?state.stock.find(s=>s.productId===it.productId):null;
+      const qty=Number(it.quantity||1);
+      brindesUn+=qty;
+      totBrindes+=getCost(p,si)*qty;
+    });
+  });
+  // Anúncio: só vale pra Hoje ou Mês atual (limitação Meta Ads)
+  const today=localDate(0);
+  const _isCurMonth=dashMonth===new Date().getMonth()&&dashYear===new Date().getFullYear();
+  const adValid=(dashPeriod==='day'&&dashDay===today)||(dashPeriod==='month'&&_isCurMonth);
+  const adSpend=adValid?(dashPeriod==='day'?Number(state.config.adsData&&state.config.adsData.today||0):Number(state.config.adsData&&state.config.adsData.month||0)):0;
+  // Custo total cheio (mesma fórmula do KPI do Dashboard)
+  const custoTotal=totProdCost+totFrete+totFee+(adValid?adSpend:0);
+  const custoPorVenda=filtered.length>0?(custoTotal/filtered.length):0;
+  // CAC (anúncio por venda)
+  const cac=(adValid&&filtered.length>0&&adSpend>0)?(adSpend/filtered.length):null;
+  // Ticket médio
+  const ticket=filtered.length>0?totRev/filtered.length:0;
+  // Margem
+  const margem=totRev>0?(totProfit/totRev)*100:0;
+  const margemBruta=totRev>0?((totRev-totProdCost)/totRev)*100:0;
+  // ROAS
+  const roas=adValid&&adSpend>0?(totRev/adSpend):null;
+  // Seguidores ganhos no período
+  const _igHist=(state.config.igHistory||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+  function igAsOf(d){let v=null;for(const e of _igHist){if(e.date<=d)v=Number(e.count);else break;}return v;}
+  const igLatest=_igHist.length?Number(_igHist[_igHist.length-1].count):0;
+  let igDelta=null,igPeriodoLabel='';
+  if(_igHist.length>=2){
+    if(dashPeriod==='day'){
+      // Ganho do dia = count do dia − count do dia anterior
+      const dPrev=(()=>{const d=new Date(dashDay+'T12:00:00');d.setDate(d.getDate()-1);return d.toLocaleDateString('fr-CA');})();
+      const end=dashDay===today?igLatest:igAsOf(dashDay);
+      const start=igAsOf(dPrev);
+      if(end!==null&&start!==null)igDelta=end-start;
+      igPeriodoLabel='no dia';
+    }else if(dashPeriod==='week'){
+      const ini=localDate(-6);const start=igAsOf((()=>{const d=new Date(ini+'T12:00:00');d.setDate(d.getDate()-1);return d.toLocaleDateString('fr-CA');})());
+      if(start!==null)igDelta=igLatest-start;
+      igPeriodoLabel='nos últimos 7 dias';
+    }else if(dashPeriod==='month'){
+      const ini=`${dashYear}-${String(dashMonth+1).padStart(2,'0')}-01`;
+      const fim=new Date(dashYear,dashMonth+1,0).toLocaleDateString('fr-CA');
+      const dPrev=(()=>{const d=new Date(ini+'T12:00:00');d.setDate(d.getDate()-1);return d.toLocaleDateString('fr-CA');})();
+      const start=igAsOf(dPrev);const end=igAsOf(fim>today?today:fim);
+      if(start!==null&&end!==null)igDelta=end-start;
+      igPeriodoLabel='no mês';
+    }else if(dashPeriod==='year'){
+      const start=igAsOf(`${dashYear-1}-12-31`);const end=igAsOf(`${dashYear}-12-31`>today?today:`${dashYear}-12-31`);
+      if(start!==null&&end!==null)igDelta=end-start;
+      igPeriodoLabel='no ano';
+    }
+  }
+  // Período legível
+  let perLbl=periodLabelFor();
+  function periodLabelFor(){
+    if(dashPeriod==='day')return dashDay===today?'Hoje · '+dashDay:dashDay===localDate(-1)?'Ontem · '+dashDay:dashDay;
+    if(dashPeriod==='week')return 'Esta semana (últimos 7 dias)';
+    if(dashPeriod==='month')return MESES[dashMonth]+'/'+dashYear;
+    if(dashPeriod==='year')return String(dashYear);
+    return '';
+  }
+  perLbl=periodLabelFor();
+
+  // Montagem do modal
+  const old=document.querySelector('.dash-summary-overlay');if(old)old.remove();
+  const ov=document.createElement('div');
+  ov.className='overlay dash-summary-overlay';
+  // Linha auxiliar
+  const row=(emoji,label,value,color,sub)=>`<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:11px 14px;border-bottom:1px solid var(--bd)">
+    <div style="display:flex;align-items:center;gap:10px;flex:1"><span style="font-size:18px;width:24px;text-align:center">${emoji}</span><div><div style="font-size:11px;color:var(--txd);text-transform:uppercase;letter-spacing:.5px">${label}</div>${sub?`<div style="font-size:10px;color:var(--txd);margin-top:1px">${sub}</div>`:''}</div></div>
+    <div style="font-size:16px;font-weight:700;color:${color||'var(--txm)'};text-align:right;white-space:nowrap">${value}</div>
+  </div>`;
+
+  ov.innerHTML=`<div class="modal" style="max-width:540px">
+    <div class="modal-header" style="padding-bottom:10px;border-bottom:1px solid var(--bd)">
+      <div>
+        <h2 style="margin:0">📋 Resumo</h2>
+        <div style="font-size:12px;color:var(--or);margin-top:4px;font-weight:600">${esc(perLbl)}</div>
+      </div>
+      <button class="btn bg2 sm" onclick="this.closest('.overlay').remove()">×</button>
+    </div>
+    <div class="modal-body" style="padding:0">
+      ${row('🛒','Vendas feitas',filtered.length+' pedido'+(filtered.length===1?'':'s'),'var(--bl)',filtered.length>0?'ticket médio '+fmtBRL(ticket):null)}
+      ${row('⌚','Smartwatches vendidos',swCount+' unidades','#a855f7')}
+      ${row('💰','Faturamento total',fmtBRL(totRev),'var(--or)')}
+      ${row('📦','Custo dos produtos',fmtBRL(totProdCost),'var(--rd)','itens + upsells + brindes')}
+      ${row('🛵','Frete (custo)',fmtBRL(totFrete),'var(--rd)','motoboy + correios')}
+      ${row('🎁','Brindes',brindesUn>0?(fmtBRL(totBrindes)+' · '+brindesUn+' un.'):'R$ 0,00','var(--rd)','já incluso no custo dos produtos')}
+      ${row('💳','Taxas maquininha',fmtBRL(totFee),'var(--rd)')}
+      ${row('📢','Investido em anúncios',adValid?fmtBRL(adSpend):'—','var(--bl)',adValid?(cac!==null?'CAC '+fmtBRL(cac)+' por venda':null):'só hoje / mês atual')}
+      ${row('💸','Custo total do período',fmtBRL(custoTotal),'var(--rd)',filtered.length>0?'média '+fmtBRL(custoPorVenda)+' por venda':null)}
+      ${row('✅','Lucro líquido',fmtBRL(totProfit),totProfit>=0?'var(--gr)':'var(--rd)',fmtPct(margem)+' margem · bruta '+fmtPct(margemBruta))}
+      ${roas!==null?row('📈','ROAS',roas.toFixed(1)+'x',roas>=2?'var(--gr)':roas>=1?'var(--or)':'var(--rd)','cada R$1 em anúncio virou '+fmtBRL(roas)):''}
+      ${(dashPeriod==='day'||dashPeriod==='week'||dashPeriod==='month'||dashPeriod==='year')?row('📱','Seguidores Instagram',igDelta===null?'—':((igDelta>=0?'+':'')+igDelta+' '+igPeriodoLabel),igDelta===null?'var(--txd)':igDelta>0?'var(--gr)':igDelta<0?'var(--rd)':'var(--txm)','total atual: '+(igLatest?igLatest.toLocaleString('pt-BR'):'—')):''}
+    </div>
+    <div class="modal-footer"><button class="btn bp" onclick="this.closest('.overlay').remove()">Fechar</button></div>
+  </div>`;
+  ov.onclick=e=>{if(e.target===ov)ov.remove();};
+  document.body.appendChild(ov);
+}
+
 function updateConfig(k,v){state.config[k]=v;save('config');render();}
 function addValor(){state.config.valores=[...(state.config.valores||[]),'Novo valor...'];save('config');render();}
 function removeValor(i){state.config.valores=state.config.valores.filter((_,x)=>x!==i);save('config');render();}
