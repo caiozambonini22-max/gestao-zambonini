@@ -1800,30 +1800,61 @@ function parseWA(){
 
   // 6. NOME — "Nome: X" ou primeira linha sem dígitos antes de uns outros campos
   p.clientName=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Nome[:\s]+([^\n]+)/i);
-  // 7. ENDEREÇO / RUA — "Endereço: X" ou "Rua: X"
+  // 7. ENDEREÇO / RUA — "Endereço: X" ou "Rua: X" — pode ser multilinha (ex: "Rua X, 123\nCidade/SP")
   let endereco=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*(?:Endere[çc]o|Rua)[:\s]+([^\n]+)/i);
   if(endereco){
-    // Tenta separar "Rua X, 123, complemento"
+    // Remove sufixos do tipo " - Bairro" no fim da rua (vem em alguns templates)
+    // Quebra primeiro por vírgula
     const partes=endereco.split(',').map(s=>s.trim());
     p.street=partes[0]||'';
-    // Procura número (1-6 dígitos no segundo pedaço)
     if(partes[1]){
-      const numM=partes[1].match(/^(\d{1,6}[A-Za-z]?)/);
-      if(numM){p.streetNum=numM[1];p.complement=partes[1].replace(numM[1],'').trim();}
-      else p.complement=partes[1];
+      // O segundo pedaço normalmente é "123" ou "123 - Bairro" ou "123 Apto X"
+      const segundo=partes[1];
+      const numM=segundo.match(/^(\d{1,6}[A-Za-z]?)\b/);
+      if(numM){
+        p.streetNum=numM[1];
+        // Resto após o número — corta "-" (separador comum) e usa como pista de bairro/complemento
+        let resto=segundo.replace(numM[1],'').trim().replace(/^[-–—]\s*/,'').trim();
+        // Se o "resto" tem cara de bairro (texto sem número de apto/casa), guarda como dica
+        if(resto&&!/(apto|apt|ap\.?\s*\d|casa|bloco|bl\.?\s*[a-z0-9]|fundos|sala)/i.test(resto)){
+          // É provável bairro — só usa se ainda não tem bairro
+          if(!p.bairro)p._dicaBairro=resto;
+        }else if(resto){
+          p.complement=resto;
+        }
+      }else{
+        // Sem número claro: terceiro pedaço pode ser complemento
+        p.complement=segundo;
+      }
     }
-    if(partes[2])p.complement=(p.complement?p.complement+' ':'')+partes[2];
   }
   // 8. NÚMERO (separado) — "Número: 123"
   const numLbl=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*N[úu]mero[:\s]+([^\n]+)/i);
   if(numLbl)p.streetNum=numLbl;
-  // 9. COMPLEMENTO / Ponto de referência
-  const compLbl=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*(?:Complemento|Ponto de refer[êe]ncia|Refer[êe]ncia)[:\s]+([^\n]+)/i);
+  // 9. COMPLEMENTO — Apto/Casa/Bloco. NÃO confundir com Ponto de Referência.
+  const compLbl=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Complemento[:\s]+([^\n]+)/i);
   if(compLbl)p.complement=(p.complement?p.complement+' — ':'')+compLbl;
-  // 10. BAIRRO
+  // 9b. PONTO DE REFERÊNCIA — vai para Observações (notes), não para o complemento do endereço
+  const refLbl=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*(?:Ponto de refer[êe]ncia|Refer[êe]ncia)[:\s]+([^\n]+)/i);
+  if(refLbl)p.notes=(p.notes?p.notes+'\n':'')+'📍 Ref: '+refLbl;
+  // 10. BAIRRO (com fallback pra dica do endereço)
   p.bairro=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Bairro[:\s]+([^\n]+)/i);
-  // 11. CIDADE
+  if(!p.bairro&&p._dicaBairro)p.bairro=p._dicaBairro;
+  delete p._dicaBairro;
+  // 11. CIDADE — aceita "Cidade: X" OU "Cidade/UF" em linha solta (ex: "Batatais/SP")
   p.city=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Cidade[:\s]+([^\n]+)/i);
+  if(!p.city){
+    // Procura padrão "Cidade/SP" em qualquer linha
+    const ciM=txt.match(/(?:^|\n)\s*([A-ZÀ-Ÿ][A-Za-zÀ-ÿ\s.]{2,30})\/([A-Z]{2})\s*$/m);
+    if(ciM){p.city=ciM[1].trim();if(!p.state)p.state=ciM[2];}
+  }
+  // Limpa "Estado: São Paulo" → SP
+  const estadoFull=afterLabel(/(?:^|\n)\s*(?:☑\ufe0f?|✔|✓)?\s*Estado[:\s]+([^\n]+)/i);
+  if(estadoFull&&!p.state){
+    const ufMap={'são paulo':'SP','sao paulo':'SP','rio de janeiro':'RJ','minas gerais':'MG','espírito santo':'ES','espirito santo':'ES','paraná':'PR','parana':'PR','santa catarina':'SC','rio grande do sul':'RS','bahia':'BA','goiás':'GO','goias':'GO','distrito federal':'DF','mato grosso':'MT','mato grosso do sul':'MS','pernambuco':'PE','ceará':'CE','ceara':'CE','pará':'PA','para':'PA','maranhão':'MA','maranhao':'MA','paraíba':'PB','paraiba':'PB','rio grande do norte':'RN','alagoas':'AL','piauí':'PI','piaui':'PI','sergipe':'SE','tocantins':'TO','rondônia':'RO','rondonia':'RO','acre':'AC','amazonas':'AM','roraima':'RR','amapá':'AP','amapa':'AP'};
+    const key=estadoFull.toLowerCase().trim();
+    p.state=ufMap[key]||(estadoFull.length===2?estadoFull.toUpperCase():'');
+  }
   // 12. NOME alternativo (se não achou): primeira linha não vazia que tenha 2+ palavras de letras
   if(!p.clientName){
     const linhas=txt.split('\n').map(l=>l.trim()).filter(Boolean);
@@ -1841,6 +1872,11 @@ function parseWA(){
 
   // ── Aplica no modal ──
   ['clientName','cpfCnpj','phone','email','street','streetNum','complement','bairro','cep','city','state'].forEach(k=>{if(p[k])orderModalData[k]=p[k];});
+  // Notes acumula (não sobrescreve se já houver algo escrito)
+  if(p.notes){
+    const existing=(orderModalData.notes||'').trim();
+    orderModalData.notes=existing?existing+'\n'+p.notes:p.notes;
+  }
   if(p.paymentType){const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments=[{id:uid(),type:p.paymentType,maquininhaId:fmq,mode:'presencial',installments:1,amount:''}];}
   showOrderModal();showDadosTab();
 
