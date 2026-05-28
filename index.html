@@ -602,9 +602,9 @@ function renderDashboard(){
   const adSpendValid=(dashPeriod==='day'&&dashDay===todayStr0)||(dashPeriod==='month'&&_isCurMonth);
   const adSpendForCac=adSpendValid?ads:0;
   const cacPorVenda=(adSpendValid&&filtered.length>0&&adSpendForCac>0)?(adSpendForCac/filtered.length):null;
-  // Custo total de produto+frete+taxa do período (já vem de calcM)
-  const custoOperacional=allM.reduce((a,m)=>a+m.cost+m.mot+m.cor+m.fee,0);
-  // Custo cheio por venda = (operacional + anúncio) ÷ vendas
+  // Custo total do período: produtos + brindes + upsells + fretes + taxas (tudo que sai do caixa)
+  const custoOperacional=allM.reduce((a,m)=>a+m.cost+(m.upsellCost||0)+m.mot+m.cor+m.fee,0);
+  // Custo cheio total inclui também anúncio (quando válido)
   const custoCheioTotal=custoOperacional+adSpendForCac;
   const custoCheioPorVenda=filtered.length>0?(custoCheioTotal/filtered.length):0;
   const roas=ads>0?(totalRev/ads).toFixed(1):0;
@@ -776,8 +776,8 @@ function renderDashboard(){
   </div>
   <div class="g4" style="margin-bottom:16px">
     <div class="card" style="border-color:rgba(168,85,247,.25)"><div class="ct">⌚ Smartwatches Vendidos</div><div class="cv" style="color:#a855f7">${swCount}</div><div class="cs">unidades em ${periodLabel}</div></div>
-    <div class="card" style="border-color:rgba(59,130,246,.25)"><div class="ct">🎯 Anúncio por Venda (CAC)</div><div class="cv cv-bl">${cacPorVenda===null?'—':fmtBRL(cacPorVenda)}</div><div class="cs">${cacPorVenda===null?'só hoje / mês atual':'gasto Meta ÷ '+filtered.length+' vendas'}</div></div>
-    <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">💸 Custo Cheio por Venda</div><div class="cv cv-rd">${filtered.length>0?fmtBRL(custoCheioPorVenda):'—'}</div><div class="cs">produto+frete+taxa${adSpendValid?'+anúncio':''}</div></div>
+    <div class="card" style="border-color:rgba(59,130,246,.25)"><div class="ct">🎯 Custo de Anúncio por Venda (CPV/CAC)</div><div class="cv cv-bl">${cacPorVenda===null?'—':fmtBRL(cacPorVenda)}</div><div class="cs">${cacPorVenda===null?'só hoje / mês atual':'gasto Meta ÷ '+filtered.length+' vendas'}</div></div>
+    <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">💸 Custo Total do Período</div><div class="cv cv-rd">${fmtBRL(custoCheioTotal)}</div><div class="cs">produto+frete+taxa${adSpendValid?'+anúncio':''}${filtered.length>0?` · <span style="color:var(--txm)">média por venda: <strong>${fmtBRL(custoCheioPorVenda)}</strong></span>`:''}</div></div>
     <div class="card" style="border-color:rgba(59,130,246,.2)"><div class="ct">Numero de Pedidos</div><div class="cv cv-bl">${filtered.length}</div><div class="cs">${fmtBRL(totalMot+totalCor)} de frete · ${fmtBRL(totalFee)} de taxa</div></div>
   </div>
   ${presOrders.length>0?`<div style="padding:12px 16px;background:var(--ordim);border:1px solid var(--bdb);border-radius:8px;margin-bottom:16px;display:flex;gap:12px;align-items:center"><span style="font-size:18px">🏪</span><div><div style="font-weight:700">Loja Fisica: <span style="color:var(--or)">${presOrders.length} pedidos</span></div><div style="font-size:11px;color:var(--txm)">${fmtBRL(presOrders.reduce((a,o)=>a+calcM(o).rev,0))} — ${fmtPct((presOrders.length/filtered.length)*100)} do total</div></div></div>`:''}
@@ -812,11 +812,11 @@ function renderDashboard(){
         </div>
         ${ads>0?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">
           <div style="background:var(--sf3);border-radius:6px;padding:7px 10px;text-align:center">
-            <div style="font-size:9px;color:var(--txd);margin-bottom:2px">CPL mês</div>
+            <div style="font-size:9px;color:var(--txd);margin-bottom:2px">CPL Meta Ads</div>
             <div style="font-size:13px;font-weight:700;color:var(--bl)">${state.config.adsData&&state.config.adsData.cplMes>0?fmtBRL(state.config.adsData.cplMes):'—'}</div>
           </div>
-          <div style="background:var(--sf3);border-radius:6px;padding:7px 10px;text-align:center">
-            <div style="font-size:9px;color:var(--txd);margin-bottom:2px">Leads mês</div>
+          <div style="background:var(--sf3);border-radius:6px;padding:7px 10px;text-align:center" title="Conversões de Lead rastreadas pelo Pixel/CAPI (Tintim). Não conta os leads orgânicos do WhatsApp.">
+            <div style="font-size:9px;color:var(--txd);margin-bottom:2px">Leads Meta Ads ⓘ</div>
             <div style="font-size:13px;font-weight:700;color:var(--bl)">${state.config.adsData&&state.config.adsData.leadsMes>0?state.config.adsData.leadsMes:'—'}</div>
           </div>
         </div>`:''}
@@ -3149,20 +3149,38 @@ function getRankingOrders(){
 }
 
 function aggregateByProduct(orders){
-  // Agrega vendas por productId: soma unidades (não-brinde), receita, custo. Inclui itens E upsells.
+  // Agrega vendas por productId, com breakdown por variação. Inclui itens E upsells.
   const agg={};
-  function add(productId,qty,salePrice,costUnit){
-    if(!productId)return;
-    if(!agg[productId])agg[productId]={productId,units:0,revenue:0,cost:0,giftUnits:0};
-    agg[productId].units+=qty;
-    agg[productId].revenue+=salePrice*qty;
-    agg[productId].cost+=costUnit*qty;
+  // Resolve o nome da variação a partir do productId+variacaoId
+  function varName(productId,variacaoId){
+    if(!variacaoId)return '(sem variação)';
+    const si=state.stock&&state.stock.find(s=>s.productId===productId);
+    if(!si||!si.variations)return '(variação)';
+    const v=si.variations.find(x=>x.id===variacaoId);
+    return v?v.name:'(variação)';
   }
-  function addGift(productId,qty,costUnit){
+  function ensure(productId){
+    if(!agg[productId])agg[productId]={productId,units:0,revenue:0,cost:0,giftUnits:0,vars:{}};
+    return agg[productId];
+  }
+  function ensureVar(productId,varKey){
+    const a=ensure(productId);
+    if(!a.vars[varKey])a.vars[varKey]={name:varKey,units:0,revenue:0,cost:0,giftUnits:0};
+    return a.vars[varKey];
+  }
+  function add(productId,variacaoKey,qty,salePrice,costUnit){
     if(!productId)return;
-    if(!agg[productId])agg[productId]={productId,units:0,revenue:0,cost:0,giftUnits:0};
-    agg[productId].giftUnits+=qty;
-    agg[productId].cost+=costUnit*qty; // brinde tem custo mas zero receita
+    const a=ensure(productId);
+    a.units+=qty;a.revenue+=salePrice*qty;a.cost+=costUnit*qty;
+    const v=ensureVar(productId,variacaoKey);
+    v.units+=qty;v.revenue+=salePrice*qty;v.cost+=costUnit*qty;
+  }
+  function addGift(productId,variacaoKey,qty,costUnit){
+    if(!productId)return;
+    const a=ensure(productId);
+    a.giftUnits+=qty;a.cost+=costUnit*qty;
+    const v=ensureVar(productId,variacaoKey);
+    v.giftUnits+=qty;v.cost+=costUnit*qty;
   }
   orders.forEach(o=>{
     const items=o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}];
@@ -3172,22 +3190,31 @@ function aggregateByProduct(orders){
       const si=state.stock?state.stock.find(s=>s.productId===it.productId):null;
       const cu=getCost(p,si);
       const qty=Number(it.quantity||1);
-      if(it.isGift)addGift(it.productId,qty,cu);
-      else add(it.productId,qty,Number(it.salePrice||0),cu);
+      const vKey=varName(it.productId,it.variacaoId);
+      if(it.isGift)addGift(it.productId,vKey,qty,cu);
+      else add(it.productId,vKey,qty,Number(it.salePrice||0),cu);
     });
     (o.upsells||[]).forEach(u=>{
       const p=state.prods.find(x=>x.id===u.productId);
       if(!p)return;
       const si=state.stock?state.stock.find(s=>s.productId===u.productId):null;
       const cu=getCost(p,si);
-      add(u.productId,Number(u.quantity||1),Number(u.price||0),cu);
+      // Upsell guarda o nome da variação no campo variacaoName
+      const vKey=u.variacaoName||'(sem variação)';
+      add(u.productId,vKey,Number(u.quantity||1),Number(u.price||0),cu);
     });
   });
-  // Computa lucro e margem por produto
+  // Computa lucro e margem por produto e por variação
   return Object.values(agg).map(a=>{
     const profit=a.revenue-a.cost;
     const margin=a.revenue>0?(profit/a.revenue)*100:0;
-    return {...a,profit,margin};
+    // Lista de variações ordenada por unidades vendidas (decrescente)
+    const variations=Object.values(a.vars).map(v=>{
+      const vp=v.revenue-v.cost;
+      const vm=v.revenue>0?(vp/v.revenue)*100:0;
+      return {...v,profit:vp,margin:vm};
+    }).sort((x,y)=>y.units-x.units);
+    return {productId:a.productId,units:a.units,revenue:a.revenue,cost:a.cost,giftUnits:a.giftUnits,profit,margin,variations};
   });
 }
 
@@ -3234,24 +3261,44 @@ function renderRankings(){
   const arrow=(col)=>rkSort===col?(rkSortDir==='desc'?' ▼':' ▲'):'';
   const th=(col,label,align)=>`<th onclick="setRkSort('${col}')" style="cursor:pointer;text-align:${align||'left'};user-select:none" title="Ordenar por ${label}">${label}${arrow(col)}</th>`;
 
+  if(!window._rkExpanded)window._rkExpanded={};
   let tbody='';
   if(rows.length===0){
-    tbody=`<tr><td colspan="6"><div class="empty"><div class="empty-ic">📊</div><p>Nenhuma venda no período selecionado.</p></div></td></tr>`;
+    tbody=`<tr><td colspan="8"><div class="empty"><div class="empty-ic">📊</div><p>Nenhuma venda no período selecionado.</p></div></td></tr>`;
   }else{
     rows.forEach((r,i)=>{
       const p=state.prods.find(x=>x.id===r.productId);
       const nm=p?p.name:'(produto removido)';
       const rank=i+1;
       const rankColor=rank===1?'#facc15':rank===2?'#cbd5e1':rank===3?'#fb923c':'var(--txd)';
-      tbody+=`<tr>
+      // Linha expansível só quando há mais de uma variação (ou uma variação que não seja "sem variação")
+      const vars=r.variations||[];
+      const hasBreakdown=vars.length>1||(vars.length===1&&vars[0].name!=='(sem variação)');
+      const expanded=!!window._rkExpanded[r.productId];
+      const caret=hasBreakdown?`<span style="display:inline-block;width:14px;color:var(--txd);font-size:10px;transition:transform .1s;${expanded?'transform:rotate(90deg)':''}">▶</span>`:'<span style="display:inline-block;width:14px"></span>';
+      tbody+=`<tr ${hasBreakdown?`onclick="window._rkExpanded['${r.productId}']=!window._rkExpanded['${r.productId}'];render()" style="cursor:pointer"`:''}>
         <td style="font-weight:700;color:${rankColor};width:32px">#${rank}</td>
-        <td style="font-weight:600">${esc(nm)}${r.giftUnits>0?` <span style="font-size:9px;color:var(--txd)">(+${r.giftUnits} brinde${r.giftUnits>1?'s':''})</span>`:''}</td>
+        <td style="font-weight:600">${caret} ${esc(nm)}${r.giftUnits>0?` <span style="font-size:9px;color:var(--txd)">(+${r.giftUnits} brinde${r.giftUnits>1?'s':''})</span>`:''}${hasBreakdown?` <span style="font-size:9px;color:var(--txd)">${vars.length} variaç${vars.length>1?'ões':'ão'}</span>`:''}</td>
         <td style="text-align:right;font-weight:700;color:var(--bl)">${r.units}</td>
         <td style="text-align:right;color:var(--or)">${fmtBRL(r.revenue)}</td>
         <td style="text-align:right;color:var(--rd)">${fmtBRL(r.cost)}</td>
         <td style="text-align:right;font-weight:700;color:${r.profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(r.profit)}</td>
         <td style="text-align:right;color:${r.margin>=0?'var(--gr)':'var(--rd)'}">${fmtPct(r.margin)}</td>
       </tr>`;
+      // Linhas das variações (quando expandido)
+      if(hasBreakdown&&expanded){
+        vars.forEach(v=>{
+          tbody+=`<tr style="background:rgba(249,115,22,.04)">
+            <td></td>
+            <td style="padding-left:38px;font-size:11px;color:var(--txm)">↳ ${esc(v.name)}${v.giftUnits>0?` <span style="font-size:9px;color:var(--txd)">(+${v.giftUnits} brinde${v.giftUnits>1?'s':''})</span>`:''}</td>
+            <td style="text-align:right;color:var(--bl);font-size:11px">${v.units}</td>
+            <td style="text-align:right;color:var(--or);font-size:11px">${fmtBRL(v.revenue)}</td>
+            <td style="text-align:right;color:var(--rd);font-size:11px">${fmtBRL(v.cost)}</td>
+            <td style="text-align:right;color:${v.profit>=0?'var(--gr)':'var(--rd)'};font-size:11px">${fmtBRL(v.profit)}</td>
+            <td style="text-align:right;color:${v.margin>=0?'var(--gr)':'var(--rd)'};font-size:11px">${fmtPct(v.margin)}</td>
+          </tr>`;
+        });
+      }
     });
   }
 
@@ -3305,7 +3352,7 @@ function renderRankings(){
     <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
       <div>
         <div style="font-weight:700">Ranking completo</div>
-        <div style="font-size:11px;color:var(--txd)">Clique nas colunas para reordenar. Brindes não contam como unidades vendidas, mas o custo deles entra no cálculo do pedido em que apareceram.</div>
+        <div style="font-size:11px;color:var(--txd)">Clique nas colunas para reordenar. Clique em ▶ na linha do produto para ver as variações (cores/tamanhos) mais vendidas. Brindes não contam como unidades vendidas, mas o custo deles entra no cálculo do pedido em que apareceram.</div>
       </div>
     </div>
     <div class="tw"><table>
@@ -3598,7 +3645,7 @@ function renderMetricas(){
     <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:12px">
       <div class="card" style="border-color:rgba(249,115,22,.3)"><div class="ct">💸 Gasto Hoje</div><div class="cv cv-or" style="font-size:20px">${fmtBRL(gastoHoje)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${(state.config.adsData&&state.config.adsData.todayImpressions)||0} impressões</div></div>
       <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">📅 Gasto no Mês</div><div class="cv cv-rd" style="font-size:20px">${fmtBRL(gastoMes)}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${impressoes.toLocaleString('pt-BR')} impressões</div></div>
-      <div class="card"><div class="ct">💬 Leads Hoje / Mês</div><div class="cv cv-bl" style="font-size:20px">${(state.config.adsData&&state.config.adsData.leadsHoje)||0} <span style="font-size:13px;color:var(--txd)">/ ${(state.config.adsData&&state.config.adsData.leadsMes)||0}</span></div><div style="font-size:10px;color:var(--txd);margin-top:2px">CPL mês: ${(state.config.adsData&&state.config.adsData.cplMes)>0?fmtBRL(state.config.adsData.cplMes):'—'}</div></div>
+      <div class="card" title="Conversões de Lead rastreadas pelo Pixel/CAPI (Tintim). Não conta os leads orgânicos do WhatsApp."><div class="ct">💬 Leads Meta Ads ⓘ</div><div class="cv cv-bl" style="font-size:20px">${(state.config.adsData&&state.config.adsData.leadsHoje)||0} <span style="font-size:13px;color:var(--txd)">/ ${(state.config.adsData&&state.config.adsData.leadsMes)||0}</span></div><div style="font-size:10px;color:var(--txd);margin-top:2px">Hoje / Mês · CPL: ${(state.config.adsData&&state.config.adsData.cplMes)>0?fmtBRL(state.config.adsData.cplMes):'—'}</div></div>
       <div class="card"><div class="ct">🛒 Vendas Meta / Valor</div><div class="cv cv-gr" style="font-size:20px">${(state.config.adsData&&state.config.adsData.vendasMes)||0}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">${(state.config.adsData&&state.config.adsData.valorVendasMes)>0?fmtBRL(state.config.adsData.valorVendasMes):'via CAPI/Tintim'}</div></div>
       <div class="card" style="border-color:${Number(roasMes)>=2?'rgba(34,197,94,.3)':'rgba(239,68,68,.2)'}"><div class="ct">📈 ROAS Mês</div><div class="cv ${Number(roasMes)>=2?'cv-gr':Number(roasMes)>=1?'cv-or':'cv-rd'}" style="font-size:20px">${gastoMes>0?roasMes+'x':'—'}</div><div style="font-size:10px;color:var(--txd);margin-top:2px">CTR ${ctr}% · CPC R$${cpc}</div></div>
     </div>
