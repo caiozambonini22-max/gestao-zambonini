@@ -679,8 +679,10 @@ async function loadAll(){
   render();
 
   // ── PASSO 2: Sincroniza com Supabase em background ──
-  // REGRA: só sobrescreve se Supabase tiver MAIS dados (ex: mais pedidos)
-  // Nunca sobrescreve dados locais com dados vazios do Supabase
+  // REGRA: local SEMPRE vence se tiver mais dados. Nuvem só sobrescreve em duas situações:
+  //   (a) Local está vazio (primeira instalação ou outro navegador)
+  //   (b) Nuvem tem MAIS ou IGUAL quantidade de itens (sync entre dispositivos)
+  // Isso evita que um config/produtos antigo da nuvem destrua dados frescos locais.
   try{
     const timeout=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),30000));
     const fetchAll=Promise.all(keys.map(async k=>{
@@ -691,18 +693,35 @@ async function loadAll(){
     let updated=false;
     results.forEach(({k,v})=>{
       if(v===null||v===undefined)return;
-      // Supabase é a fonte de verdade — mas só sobrescreve se tiver dados
-      // Para arrays: só usa Supabase se retornou algo (array não vazio ou igual ao local)
       const local=state[k];
-      const supEmpty=Array.isArray(v)&&v.length===0&&Array.isArray(local)&&local.length>0;
-      if(supEmpty){
-        // Supabase está vazio mas local tem dados — faz upload pro Supabase (recuperação)
-        dbSet(k,state[k]);
-        return;
+
+      // PROTEÇÃO: arrays — só sobrescreve se nuvem tem >= itens que o local
+      if(Array.isArray(v)){
+        const cloudLen=v.length;
+        const localLen=Array.isArray(local)?local.length:0;
+        if(localLen>cloudLen){
+          // Local tem mais — re-upload local pra nuvem (recuperação)
+          console.log(`[load] local "${k}" tem ${localLen} itens vs nuvem ${cloudLen} — re-uploading`);
+          dbSet(k,state[k]);
+          return;
+        }
+        state[k]=v.filter(x=>x!==null&&x!==undefined&&typeof x==='object');
       }
-      if(k==='maqs'){state[k]=v.map(m=>{if(m.rates&&!m.rates.presencial){const p={},l={};for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}return {...m,rates:{presencial:p,link:l}};}return m;});}
-      else if(Array.isArray(v)){state[k]=v.filter(x=>x!==null&&x!==undefined&&typeof x==='object');}
-      else{state[k]=v;}
+      // PROTEÇÃO: objetos não-array (ex: config) — só sobrescreve se local NÃO existir
+      // OU se a nuvem tem o mesmo tamanho-ish (evita perder configurações).
+      else if(typeof v==='object'){
+        const localSize=local?JSON.stringify(local).length:0;
+        const cloudSize=JSON.stringify(v).length;
+        if(local&&localSize>cloudSize*1.2){
+          // Local é significativamente maior — preserva e faz upload
+          console.log(`[load] local "${k}" (${localSize}b) maior que nuvem (${cloudSize}b) — re-uploading`);
+          dbSet(k,state[k]);
+          return;
+        }
+        if(k==='maqs'){state[k]=v.map(m=>{if(m.rates&&!m.rates.presencial){const p={},l={};for(let i=1;i<=18;i++){p[i]=m.rates[i]||0;l[i]=0;}return {...m,rates:{presencial:p,link:l}};}return m;});}
+        else state[k]=v;
+      }
+      else state[k]=v;
       try{localStorage.setItem('zb_cache_'+k,JSON.stringify(state[k]));}catch{}
       updated=true;
     });
