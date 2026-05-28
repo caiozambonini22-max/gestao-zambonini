@@ -158,6 +158,7 @@ select option{background:var(--sf2);}
     <div class="topnav-r">
       <button class="btn bg2 sm" onclick="forcSync()" title="Forçar sincronização com Supabase" style="font-size:11px;padding:4px 10px">🔄 Sincronizar</button>
       <button class="btn bg2 sm" onclick="showSyncDiagnostic()" title="Diagnóstico da sincronização" style="font-size:11px;padding:4px 8px">🔍 Diag</button>
+      <button class="btn bg2 sm" onclick="exportBackup()" title="Baixar backup dos dados como JSON" style="font-size:11px;padding:4px 10px;background:rgba(34,197,94,.15);border-color:rgba(34,197,94,.4);color:var(--gr)">💾 Backup</button>
       <button class="btn bg2 sm" onclick="document.getElementById('import-input').click()" title="Importar backup" style="font-size:11px;padding:4px 10px">📂 Importar</button>
       <input id="import-input" type="file" accept=".json" style="display:none" onchange="importBackup(this)">
       <button class="btn bg2 sm" onclick="logout()" style="font-size:11px;padding:4px 10px">Sair</button>
