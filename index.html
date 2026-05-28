@@ -500,15 +500,66 @@ function save(key){
 }
 
 async function retrySyncAll(){
+  // Abre modal de progresso
+  const old=document.querySelector('.sync-overlay');if(old)old.remove();
+  const ov=document.createElement('div');ov.className='overlay sync-overlay';
+  ov.innerHTML=`<div class="modal" style="max-width:560px">
+    <div class="modal-header"><h2 style="margin:0">🔄 Sincronização Detalhada</h2><button class="btn bg2 sm" onclick="this.closest('.overlay').remove()">×</button></div>
+    <div class="modal-body" id="sync-progress"></div>
+    <div class="modal-footer"><button class="btn bp" onclick="this.closest('.overlay').remove()">Fechar</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  const body=document.getElementById('sync-progress');
+
   setSyncStatus('syncing');
   const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
   let allOk=true;
+  let html='<div style="font-size:11px;font-family:monospace;line-height:1.6">';
+  body.innerHTML=html+'⏳ Iniciando...</div>';
+
   for(const k of keys){
-    const ok=await dbSet(k,state[k]);
-    if(!ok)allOk=false;
+    const val=state[k];
+    const size=val===undefined||val===null?0:JSON.stringify(val).length;
+    const sizeKB=(size/1024).toFixed(1);
+    const count=Array.isArray(val)?val.length:'-';
+    html+=`<div style="padding:4px 0;border-bottom:1px solid var(--bd)">📤 <strong>${k}</strong> (${count} itens · ${sizeKB} KB) ... `;
+    body.innerHTML=html+'</div>';
+
+    // Tenta upload com tratamento detalhado
+    let upResult;
+    try{
+      const {error}=await sb.from('zambonini_data').upsert(
+        {key:k, value:val, updated_at:new Date().toISOString()},
+        {onConflict:'key'}
+      );
+      if(error)upResult={ok:false,code:error.code,message:error.message,details:error.details,hint:error.hint};
+      else upResult={ok:true};
+    }catch(e){upResult={ok:false,code:'EXCEPTION',message:e.message||String(e)};}
+
+    if(upResult.ok){
+      html+='<span style="color:var(--gr)">✅ OK</span></div>';
+    }else{
+      allOk=false;
+      html+=`<span style="color:var(--rd)">❌ FALHOU</span><br>
+        <div style="padding-left:18px;font-size:10px;color:var(--rd)">
+        Código: <code>${esc(upResult.code||'?')}</code><br>
+        Mensagem: ${esc(upResult.message||'?')}<br>
+        ${upResult.details?'Detalhes: '+esc(upResult.details)+'<br>':''}
+        ${upResult.hint?'Dica: '+esc(upResult.hint)+'<br>':''}
+        </div></div>`;
+    }
+    body.innerHTML=html+'</div>';
   }
+
+  html+='</div>';
+  if(allOk){
+    html+='<div style="padding:12px 14px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.45);border-radius:8px;margin-top:10px"><div style="font-size:13px;font-weight:700;color:var(--gr)">✅ Tudo sincronizado!</div></div>';
+    showToast('✅ Sincronizado com a nuvem!','gr');
+  }else{
+    html+='<div style="padding:12px 14px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.45);border-radius:8px;margin-top:10px"><div style="font-size:13px;font-weight:700;color:var(--rd)">❌ Algumas chaves falharam</div><div style="font-size:11px;color:var(--txm);margin-top:4px">Tira print disso e manda pro Claude pra ele identificar a causa exata.</div></div>';
+  }
+  body.innerHTML=html;
   setSyncStatus(allOk?'ok':'error');
-  if(allOk)showToast('✅ Sincronizado com a nuvem!','gr');
 }
 
 // ============ LOAD ============
