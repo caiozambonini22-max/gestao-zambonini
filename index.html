@@ -328,15 +328,15 @@ async function retrySyncAll(){
 
 // ============ LOAD ============
 
-async function buscarCEP(cep, callback){
-  const c=cep.replace(/\D/g,'');
-  if(c.length!==8)return;
+async function buscarCEP(cep, callback, onError){
+  const c=(cep||'').replace(/\D/g,'');
+  if(c.length!==8){if(onError)onError({reason:'formato',cep:c,msg:'CEP deve ter 8 dígitos'});return;}
   try{
     const r=await fetch('https://viacep.com.br/ws/'+c+'/json/');
     const d=await r.json();
-    if(d.erro)return;
+    if(d.erro){if(onError)onError({reason:'inexistente',cep:c,msg:'CEP não existe nos Correios'});return;}
     callback({street:d.logradouro||'',bairro:d.bairro||'',city:d.localidade||'',state:d.uf||'',cep:c});
-  }catch(e){}
+  }catch(e){if(onError)onError({reason:'erro_rede',cep:c,msg:'Não foi possível validar (sem internet?)'});}
 }
 
 // ============ AUTH ============
@@ -1256,6 +1256,23 @@ function renderOrderModal(){
       </div>
     </div>
 
+    ${o._cepWarning?`<div style="margin-bottom:14px;padding:10px 14px;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.45);border-radius:8px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:20px">⚠️</span>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:700;color:#facc15">Conferir CEP de cobrança — ${esc(o._cepWarning.msg||'inválido')}</div>
+        <div style="font-size:11px;color:var(--txm);margin-top:2px">CEP informado: <strong>${esc(o._cepWarning.cep||'(vazio)')}</strong>. O pedido pode ser salvo, mas é importante corrigir antes de emitir nota fiscal.</div>
+      </div>
+      <button class="btn bg2 sm" onclick="orderModalData._cepWarning=null;showOrderModal()">Dispensar</button>
+    </div>`:''}
+    ${o._cepDelWarning?`<div style="margin-bottom:14px;padding:10px 14px;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.45);border-radius:8px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:20px">⚠️</span>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:700;color:#facc15">Conferir CEP de entrega — ${esc(o._cepDelWarning.msg||'inválido')}</div>
+        <div style="font-size:11px;color:var(--txm);margin-top:2px">CEP informado: <strong>${esc(o._cepDelWarning.cep||'(vazio)')}</strong>. O endereço de entrega não foi encontrado nos Correios.</div>
+      </div>
+      <button class="btn bg2 sm" onclick="orderModalData._cepDelWarning=null;showOrderModal()">Dispensar</button>
+    </div>`:''}
+
     <div style="display:grid;grid-template-columns:1fr 320px;gap:16px">
       <div>
         <!-- CLIENTE -->
@@ -1297,7 +1314,7 @@ function renderOrderModal(){
             <div class="field"><label>CEP</label>
               <div style="display:flex;gap:5px;align-items:center">
                 <input id="order-cep" value="${esc(o.cep||'')}" oninput="setOrderField('cep',this.value)" placeholder="00000-000" style="flex:1">
-                <button onclick="(async()=>{const el=document.getElementById('order-cep');if(!el)return;const btn=this;btn.textContent='⏳';btn.disabled=true;await new Promise(r=>{buscarCEP(el.value,function(d){setOrderField('street',d.street||orderModalData.street);setOrderField('bairro',d.bairro||orderModalData.bairro);setOrderField('city',d.city||orderModalData.city);setOrderField('state',d.state||orderModalData.state);setOrderField('cep',d.cep);showOrderModal();r();});setTimeout(r,4000);});btn.textContent='🔍';btn.disabled=false;})()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;color:var(--or);cursor:pointer;padding:6px 10px;font-size:14px;white-space:nowrap" title="Buscar endereço pelo CEP">🔍</button>
+                <button onclick="(async()=>{const el=document.getElementById('order-cep');if(!el)return;const btn=this;btn.textContent='⏳';btn.disabled=true;await new Promise(r=>{buscarCEP(el.value,function(d){setOrderField('street',d.street||orderModalData.street);setOrderField('bairro',d.bairro||orderModalData.bairro);setOrderField('city',d.city||orderModalData.city);setOrderField('state',d.state||orderModalData.state);setOrderField('cep',d.cep);orderModalData._cepWarning=null;showOrderModal();r();},function(err){if(orderModalData){orderModalData._cepWarning=err;showOrderModal();}r();});setTimeout(r,4000);});btn.textContent='🔍';btn.disabled=false;})()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;color:var(--or);cursor:pointer;padding:6px 10px;font-size:14px;white-space:nowrap" title="Buscar endereço pelo CEP">🔍</button>
               </div>
             </div>
           </div>
@@ -1318,7 +1335,7 @@ function renderOrderModal(){
               <div class="field"><label>CEP</label>
                 <div style="display:flex;gap:5px;align-items:center">
                   <input id="order-del-cep" value="${esc(o.deliveryCep||'')}" oninput="setOrderField('deliveryCep',this.value)" placeholder="00000-000" style="flex:1">
-                  <button onclick="(async()=>{const el=document.getElementById('order-del-cep');if(!el)return;const btn=this;btn.textContent='⏳';btn.disabled=true;await new Promise(r=>{buscarCEP(el.value,function(d){setOrderField('deliveryStreet',d.street||orderModalData.deliveryStreet);setOrderField('deliveryBairro',d.bairro||orderModalData.deliveryBairro);setOrderField('deliveryCity',d.city||orderModalData.deliveryCity);setOrderField('deliveryState',d.state||orderModalData.deliveryState);setOrderField('deliveryCep',d.cep);showOrderModal();r();});setTimeout(r,4000);});btn.textContent='🔍';btn.disabled=false;})()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;color:var(--or);cursor:pointer;padding:6px 10px;font-size:14px" title="Buscar endereço pelo CEP">🔍</button>
+                  <button onclick="(async()=>{const el=document.getElementById('order-del-cep');if(!el)return;const btn=this;btn.textContent='⏳';btn.disabled=true;await new Promise(r=>{buscarCEP(el.value,function(d){setOrderField('deliveryStreet',d.street||orderModalData.deliveryStreet);setOrderField('deliveryBairro',d.bairro||orderModalData.deliveryBairro);setOrderField('deliveryCity',d.city||orderModalData.deliveryCity);setOrderField('deliveryState',d.state||orderModalData.deliveryState);setOrderField('deliveryCep',d.cep);orderModalData._cepDelWarning=null;showOrderModal();r();},function(err){if(orderModalData){orderModalData._cepDelWarning=err;showOrderModal();}r();});setTimeout(r,4000);});btn.textContent='🔍';btn.disabled=false;})()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:6px;color:var(--or);cursor:pointer;padding:6px 10px;font-size:14px" title="Buscar endereço pelo CEP">🔍</button>
                 </div>
               </div>
             </div>
@@ -1746,7 +1763,30 @@ function parseWA(){
     if(p.quantity)orderModalData.quantity=p.quantity;
     if(p.paymentType){const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments=[{id:uid(),type:p.paymentType,maquininhaId:fmq,mode:'presencial',installments:1,amount:''}];}
     showOrderModal();showDadosTab();
+    // ── Valida CEP no ViaCEP e completa campos faltantes ──
+    if(p.cep){
+      validateAndFillCEP(p.cep);
+    }
   }).catch(()=>{if(btn){btn.disabled=false;btn.textContent='Interpretar e Preencher';}alert('Erro ao interpretar. Tente novamente.');});
+}
+
+// Valida CEP no ViaCEP; completa rua/bairro/cidade/UF se vazios; mostra aviso se inválido.
+function validateAndFillCEP(cep){
+  if(!orderModalData)return;
+  buscarCEP(cep,function(d){
+    // Sucesso: preenche apenas campos vazios (não sobrescreve o que o IA já capturou)
+    if(!orderModalData.street&&d.street)orderModalData.street=d.street;
+    if(!orderModalData.bairro&&d.bairro)orderModalData.bairro=d.bairro;
+    if(!orderModalData.city&&d.city)orderModalData.city=d.city;
+    if(!orderModalData.state&&d.state)orderModalData.state=d.state;
+    orderModalData.cep=d.cep;
+    orderModalData._cepWarning=null;
+    showOrderModal();
+  },function(err){
+    // Falha: registra aviso visível no topo, mas NÃO bloqueia o uso do form
+    orderModalData._cepWarning=err;
+    showOrderModal();
+  });
 }
 
 // Helper: calcula total real do pedido somando todos os itens
