@@ -157,6 +157,7 @@ select option{background:var(--sf2);}
     <button class="ni" onclick="setTab('config')" id="nav-config">Config</button>
     <div class="topnav-r">
       <button class="btn bg2 sm" onclick="forcSync()" title="Forçar sincronização com Supabase" style="font-size:11px;padding:4px 10px">🔄 Sincronizar</button>
+      <button class="btn bg2 sm" onclick="showSyncDiagnostic()" title="Diagnóstico da sincronização" style="font-size:11px;padding:4px 8px">🔍 Diag</button>
       <button class="btn bg2 sm" onclick="document.getElementById('import-input').click()" title="Importar backup" style="font-size:11px;padding:4px 10px">📂 Importar</button>
       <input id="import-input" type="file" accept=".json" style="display:none" onchange="importBackup(this)">
       <button class="btn bg2 sm" onclick="logout()" style="font-size:11px;padding:4px 10px">Sair</button>
@@ -294,7 +295,7 @@ async function runSyncDiagnostic(){
     if(error)writeResult={ok:false,code:error.code,message:error.message,details:error.details,hint:error.hint};
     else writeResult={ok:true};
   }catch(e){writeResult={ok:false,code:'EXCEPTION',message:e.message||String(e)};}
-  results.push({step:'1. Gravar dado de teste',...writeResult});
+  results.push({step:'1. Gravar dado de teste no Supabase',...writeResult});
 
   // Teste 2: ler o valor de volta
   let readResult;
@@ -305,21 +306,56 @@ async function runSyncDiagnostic(){
       else if(data&&data.value)readResult={ok:true,value:JSON.stringify(data.value).slice(0,80)};
       else readResult={ok:false,message:'Sem dados retornados'};
     }catch(e){readResult={ok:false,code:'EXCEPTION',message:e.message||String(e)};}
-    // Limpa o teste
     try{await sb.from('zambonini_data').delete().eq('key',testKey);}catch(e){}
   }else{
     readResult={ok:false,message:'Pulado (gravação falhou)'};
   }
-  results.push({step:'2. Ler dado de teste',...readResult});
+  results.push({step:'2. Ler dado de teste do Supabase',...readResult});
 
-  // Teste 3: tamanho do config atual (se houver)
+  // Teste 3: o que tem no Supabase agora?
+  let cloudData=null;
+  try{
+    const {data,error}=await sb.from('zambonini_data').select('key,value,updated_at');
+    if(error)cloudData={ok:false,message:error.message,code:error.code};
+    else{
+      const keys=(data||[]).map(r=>r.key).sort();
+      const orders=(data||[]).find(r=>r.key==='orders');
+      const orderCount=orders&&Array.isArray(orders.value)?orders.value.length:0;
+      const prods=(data||[]).find(r=>r.key==='prods');
+      const prodCount=prods&&Array.isArray(prods.value)?prods.value.length:0;
+      cloudData={ok:true,keys:keys,orderCount,prodCount,raw:data||[]};
+    }
+  }catch(e){cloudData={ok:false,message:e.message};}
+  results.push({step:'3. O que tem no Supabase agora',...cloudData,message:cloudData.ok?`${cloudData.keys.length} chaves · ${cloudData.orderCount} pedidos · ${cloudData.prodCount} produtos`:cloudData.message});
+
+  // Teste 4: o que tem no localStorage?
+  const localKeys=[];let localOrders=0,localProds=0;
+  for(let i=0;i<localStorage.length;i++){
+    const k=localStorage.key(i);
+    if(k&&k.startsWith('zb_cache_')){
+      localKeys.push(k.replace('zb_cache_',''));
+      if(k==='zb_cache_orders'){try{localOrders=JSON.parse(localStorage.getItem(k)).length||0;}catch{}}
+      if(k==='zb_cache_prods'){try{localProds=JSON.parse(localStorage.getItem(k)).length||0;}catch{}}
+    }
+  }
+  results.push({step:'4. O que tem no localStorage',ok:true,message:`${localKeys.length} chaves · ${localOrders} pedidos · ${localProds} produtos`});
+
+  // Teste 5: comparação cloud vs local
+  if(cloudData.ok){
+    const diff=localOrders-cloudData.orderCount;
+    const stateText=diff===0?'igual':diff>0?`local tem ${diff} pedido(s) a mais`:`Supabase tem ${-diff} pedido(s) a mais`;
+    const isOk=diff===0;
+    results.push({step:'5. Comparação local vs nuvem',ok:isOk,message:`Estado: ${stateText}${diff>0?' — não está subindo pra nuvem':''}${diff<0?' — não está baixando da nuvem':''}`});
+  }
+
+  // Teste 6: tamanho do config atual
   const cfgSize=state.config?JSON.stringify(state.config).length:0;
-  results.push({step:'3. Tamanho do config no estado',ok:cfgSize<500000,message:cfgSize.toLocaleString('pt-BR')+' bytes'+(cfgSize>500000?' ⚠️ muito grande':'')});
+  results.push({step:'6. Tamanho do config no estado',ok:cfgSize<500000,message:cfgSize.toLocaleString('pt-BR')+' bytes'+(cfgSize>500000?' ⚠️ muito grande':'')});
 
-  // Teste 4: última gravação que falhou (se houver)
+  // Teste 7: último erro registrado
   if(window._lastSyncError){
     const e=window._lastSyncError;
-    results.push({step:'4. Último erro registrado',ok:false,code:e.code,message:`[${e.op}] key=${e.key}: ${e.message}`,details:e.details,hint:e.hint});
+    results.push({step:'7. Último erro registrado',ok:false,code:e.code,message:`[${e.op}] key=${e.key}: ${e.message}`,details:e.details,hint:e.hint});
   }
 
   let html='<div style="font-size:12px;line-height:1.6">';
@@ -334,26 +370,25 @@ async function runSyncDiagnostic(){
     if(r.details)html+=`<div style="font-size:10px;color:var(--txd);margin-top:2px">Detalhes: ${esc(r.details)}</div>`;
     if(r.hint)html+=`<div style="font-size:10px;color:#facc15;margin-top:2px">💡 Dica: ${esc(r.hint)}</div>`;
     if(r.value)html+=`<div style="font-size:10px;color:var(--txd);margin-top:2px">Valor lido: <code>${esc(r.value)}</code></div>`;
+    if(r.keys&&r.keys.length>0)html+=`<div style="font-size:10px;color:var(--txd);margin-top:2px">Chaves: <code>${esc(r.keys.join(', '))}</code></div>`;
     html+=`</div>`;
   });
 
   // Conclusão automática
   const writeFailed=!results[0].ok;
+  const cloudEmpty=cloudData.ok&&cloudData.keys.length===0;
+  const localHasMore=results[4]&&!results[4].ok;
+
   if(writeFailed){
     const err=results[0];
     let conclusao='';
-    if(err.code==='42501'||/permission/i.test(err.message||'')||/policy/i.test(err.message||'')){
-      conclusao=`<strong>Causa provável: Política RLS bloqueando.</strong> A tabela <code>zambonini_data</code> tem Row Level Security ativado mas falta política de INSERT/UPDATE pra anon.<br><br>
-      <strong>Como resolver no Supabase Dashboard:</strong><br>
-      1. Abra <code>SQL Editor</code><br>
-      2. Cole e rode:<br>
-      <pre style="background:var(--sf4);padding:8px;border-radius:5px;font-size:10px;overflow:auto;margin:5px 0">CREATE POLICY "anon_full_access" ON zambonini_data
-FOR ALL TO anon USING (true) WITH CHECK (true);</pre>
-      Ou alternativamente, desativar RLS na tabela:<br>
+    if(err.code==='42501'||/permission/i.test(err.message||'')||/policy|RLS/i.test(err.message||'')){
+      conclusao=`<strong>Causa: Política RLS bloqueando.</strong> A tabela tem Row Level Security ativado mas sem política pra anon.<br><br>
+      <strong>Rode no Supabase Dashboard → SQL Editor:</strong><br>
       <pre style="background:var(--sf4);padding:8px;border-radius:5px;font-size:10px;overflow:auto;margin:5px 0">ALTER TABLE zambonini_data DISABLE ROW LEVEL SECURITY;</pre>`;
     }else if(err.code==='42P01'||/relation.*does not exist/i.test(err.message||'')){
-      conclusao=`<strong>Causa provável: Tabela <code>zambonini_data</code> não existe.</strong><br><br>
-      <strong>Crie no SQL Editor:</strong><br>
+      conclusao=`<strong>Causa: Tabela <code>zambonini_data</code> não existe.</strong><br><br>
+      <strong>Rode no Supabase SQL Editor:</strong><br>
       <pre style="background:var(--sf4);padding:8px;border-radius:5px;font-size:10px;overflow:auto;margin:5px 0">CREATE TABLE zambonini_data (
   key TEXT PRIMARY KEY,
   value JSONB,
@@ -361,22 +396,29 @@ FOR ALL TO anon USING (true) WITH CHECK (true);</pre>
 );
 ALTER TABLE zambonini_data DISABLE ROW LEVEL SECURITY;</pre>`;
     }else if(err.code==='PGRST301'||/jwt|expired|invalid/i.test(err.message||'')){
-      conclusao=`<strong>Causa provável: Chave anon expirada ou inválida.</strong><br>
-      Vá em Supabase → Settings → API → copie a nova chave anon → cole no <code>SUPA_KEY</code> do código (linha 172).`;
-    }else if(/network|fetch/i.test(err.message||'')){
-      conclusao=`<strong>Causa provável: Sem conexão ou Supabase fora do ar.</strong><br>
-      Teste abrir <a href="https://oxtxvfzeowonjsgxkcsn.supabase.co" target="_blank" style="color:var(--or)">${SUPA_URL}</a> no navegador. Se também falhar, é problema de rede.`;
+      conclusao=`<strong>Causa: Chave anon expirada/inválida.</strong> Pegue a nova em Supabase → Settings → API → anon key.`;
+    }else if(/network|fetch|failed to fetch/i.test(err.message||'')){
+      conclusao=`<strong>Causa: Sem conexão com o Supabase.</strong> Teste <a href="${SUPA_URL}" target="_blank" style="color:var(--or)">${SUPA_URL}</a>`;
     }else{
-      conclusao=`Não consegui identificar a causa automaticamente. Mostre o erro acima ao Claude pra ajustar.`;
+      conclusao=`Erro não identificado. Mostre o código + mensagem ao Claude.`;
     }
     html+=`<div style="padding:12px 14px;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.45);border-radius:8px;margin-top:6px">
       <div style="font-size:12px;font-weight:700;color:#facc15;margin-bottom:6px">🩺 Diagnóstico</div>
       <div style="font-size:11px;color:var(--txm);line-height:1.6">${conclusao}</div>
     </div>`;
+  }else if(cloudEmpty&&localKeys.length>0){
+    html+=`<div style="padding:12px 14px;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.45);border-radius:8px;margin-top:6px">
+      <div style="font-size:12px;font-weight:700;color:#facc15;margin-bottom:6px">🩺 Supabase está vazio, mas dá pra gravar</div>
+      <div style="font-size:11px;color:var(--txm);line-height:1.6">A gravação funciona (testes 1 e 2 passaram), mas a tabela está sem dados. Seus dados estão só no localStorage local. Clique em <strong>🔄 Sincronizar</strong> para subir tudo agora.</div>
+    </div>`;
+  }else if(localHasMore){
+    html+=`<div style="padding:12px 14px;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.45);border-radius:8px;margin-top:6px">
+      <div style="font-size:12px;font-weight:700;color:#facc15;margin-bottom:6px">🩺 Local tem mais dados que a nuvem</div>
+      <div style="font-size:11px;color:var(--txm);line-height:1.6">A gravação funciona, mas há registros locais que não subiram. Clique em <strong>🔄 Sincronizar</strong> para forçar o upload.</div>
+    </div>`;
   }else if(results[1].ok){
     html+=`<div style="padding:12px 14px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.45);border-radius:8px;margin-top:6px">
-      <div style="font-size:12px;font-weight:700;color:var(--gr)">✅ Conexão com Supabase funcionando perfeitamente!</div>
-      <div style="font-size:11px;color:var(--txm);margin-top:4px">Se o erro voltar, clique em ↻ Sincronizar pra reenviar tudo.</div>
+      <div style="font-size:12px;font-weight:700;color:var(--gr)">✅ Sincronização funcionando perfeitamente!</div>
     </div>`;
   }
 
