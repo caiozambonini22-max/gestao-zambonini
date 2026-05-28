@@ -258,16 +258,153 @@ function setSyncStatus(s){
   if(!dot||!txt)return;
   dot.className='sync-dot'+(s==='syncing'?' syncing':s==='error'?' error':'');
   if(s==='syncing') txt.textContent='Salvando...';
-  else if(s==='error') txt.innerHTML='⚠ Salvo local · <span style="color:var(--rd)">Erro na nuvem</span> <button onclick="retrySyncAll()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:4px;color:var(--txm);cursor:pointer;font-size:10px;padding:1px 6px;margin-left:4px">↻ Tentar</button>';
+  else if(s==='error') txt.innerHTML='⚠ Salvo local · <span style="color:var(--rd)">Erro na nuvem</span> <button onclick="retrySyncAll()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:4px;color:var(--txm);cursor:pointer;font-size:10px;padding:1px 6px;margin-left:4px">↻ Tentar</button> <button onclick="showSyncDiagnostic()" style="background:var(--sf3);border:1px solid var(--bd);border-radius:4px;color:var(--or);cursor:pointer;font-size:10px;padding:1px 6px;margin-left:2px">🔍 Diagnóstico</button>';
   else txt.textContent='✓ Salvo';
 }
+
+// Mostra um modal com o erro real do Supabase + teste de gravação ao vivo
+async function showSyncDiagnostic(){
+  const old=document.querySelector('.diag-overlay');if(old)old.remove();
+  const ov=document.createElement('div');ov.className='overlay diag-overlay';
+  ov.innerHTML=`<div class="modal" style="max-width:640px">
+    <div class="modal-header"><h2 style="margin:0">🔍 Diagnóstico de Sincronização</h2><button class="btn bg2 sm" onclick="this.closest('.overlay').remove()">×</button></div>
+    <div class="modal-body" id="diag-body">
+      <div style="text-align:center;padding:30px;color:var(--txd)">⏳ Executando testes...</div>
+    </div>
+    <div class="modal-footer"><button class="btn bp" onclick="runSyncDiagnostic()">↻ Rodar testes de novo</button><button class="btn bg2" onclick="this.closest('.overlay').remove()">Fechar</button></div>
+  </div>`;
+  ov.onclick=e=>{if(e.target===ov)ov.remove();};
+  document.body.appendChild(ov);
+  runSyncDiagnostic();
+}
+
+async function runSyncDiagnostic(){
+  const body=document.getElementById('diag-body');
+  if(!body)return;
+  body.innerHTML='<div style="text-align:center;padding:20px;color:var(--txd)">⏳ Testando...</div>';
+
+  const testKey='_diag_test_'+Date.now();
+  const testValue={t:'teste de gravação',ts:Date.now()};
+  const results=[];
+
+  // Teste 1: gravar um valor pequeno
+  let writeResult;
+  try{
+    const {error}=await sb.from('zambonini_data').upsert({key:testKey,value:testValue,updated_at:new Date().toISOString()},{onConflict:'key'});
+    if(error)writeResult={ok:false,code:error.code,message:error.message,details:error.details,hint:error.hint};
+    else writeResult={ok:true};
+  }catch(e){writeResult={ok:false,code:'EXCEPTION',message:e.message||String(e)};}
+  results.push({step:'1. Gravar dado de teste',...writeResult});
+
+  // Teste 2: ler o valor de volta
+  let readResult;
+  if(writeResult.ok){
+    try{
+      const {data,error}=await sb.from('zambonini_data').select('value').eq('key',testKey).single();
+      if(error)readResult={ok:false,code:error.code,message:error.message};
+      else if(data&&data.value)readResult={ok:true,value:JSON.stringify(data.value).slice(0,80)};
+      else readResult={ok:false,message:'Sem dados retornados'};
+    }catch(e){readResult={ok:false,code:'EXCEPTION',message:e.message||String(e)};}
+    // Limpa o teste
+    try{await sb.from('zambonini_data').delete().eq('key',testKey);}catch(e){}
+  }else{
+    readResult={ok:false,message:'Pulado (gravação falhou)'};
+  }
+  results.push({step:'2. Ler dado de teste',...readResult});
+
+  // Teste 3: tamanho do config atual (se houver)
+  const cfgSize=state.config?JSON.stringify(state.config).length:0;
+  results.push({step:'3. Tamanho do config no estado',ok:cfgSize<500000,message:cfgSize.toLocaleString('pt-BR')+' bytes'+(cfgSize>500000?' ⚠️ muito grande':'')});
+
+  // Teste 4: última gravação que falhou (se houver)
+  if(window._lastSyncError){
+    const e=window._lastSyncError;
+    results.push({step:'4. Último erro registrado',ok:false,code:e.code,message:`[${e.op}] key=${e.key}: ${e.message}`,details:e.details,hint:e.hint});
+  }
+
+  let html='<div style="font-size:12px;line-height:1.6">';
+  results.forEach(r=>{
+    const ok=r.ok!==false;
+    const icon=ok?'✅':'❌';
+    const color=ok?'var(--gr)':'var(--rd)';
+    html+=`<div style="padding:10px 12px;border:1px solid var(--bd);border-radius:7px;margin-bottom:8px;background:var(--sf3)">
+      <div style="font-weight:700;color:${color};margin-bottom:4px">${icon} ${esc(r.step)}</div>`;
+    if(r.code)html+=`<div style="font-size:11px;color:var(--txd)">Código: <code style="background:var(--sf4);padding:1px 5px;border-radius:3px">${esc(r.code)}</code></div>`;
+    if(r.message)html+=`<div style="font-size:11px;color:var(--txm);margin-top:2px;font-family:monospace">${esc(r.message)}</div>`;
+    if(r.details)html+=`<div style="font-size:10px;color:var(--txd);margin-top:2px">Detalhes: ${esc(r.details)}</div>`;
+    if(r.hint)html+=`<div style="font-size:10px;color:#facc15;margin-top:2px">💡 Dica: ${esc(r.hint)}</div>`;
+    if(r.value)html+=`<div style="font-size:10px;color:var(--txd);margin-top:2px">Valor lido: <code>${esc(r.value)}</code></div>`;
+    html+=`</div>`;
+  });
+
+  // Conclusão automática
+  const writeFailed=!results[0].ok;
+  if(writeFailed){
+    const err=results[0];
+    let conclusao='';
+    if(err.code==='42501'||/permission/i.test(err.message||'')||/policy/i.test(err.message||'')){
+      conclusao=`<strong>Causa provável: Política RLS bloqueando.</strong> A tabela <code>zambonini_data</code> tem Row Level Security ativado mas falta política de INSERT/UPDATE pra anon.<br><br>
+      <strong>Como resolver no Supabase Dashboard:</strong><br>
+      1. Abra <code>SQL Editor</code><br>
+      2. Cole e rode:<br>
+      <pre style="background:var(--sf4);padding:8px;border-radius:5px;font-size:10px;overflow:auto;margin:5px 0">CREATE POLICY "anon_full_access" ON zambonini_data
+FOR ALL TO anon USING (true) WITH CHECK (true);</pre>
+      Ou alternativamente, desativar RLS na tabela:<br>
+      <pre style="background:var(--sf4);padding:8px;border-radius:5px;font-size:10px;overflow:auto;margin:5px 0">ALTER TABLE zambonini_data DISABLE ROW LEVEL SECURITY;</pre>`;
+    }else if(err.code==='42P01'||/relation.*does not exist/i.test(err.message||'')){
+      conclusao=`<strong>Causa provável: Tabela <code>zambonini_data</code> não existe.</strong><br><br>
+      <strong>Crie no SQL Editor:</strong><br>
+      <pre style="background:var(--sf4);padding:8px;border-radius:5px;font-size:10px;overflow:auto;margin:5px 0">CREATE TABLE zambonini_data (
+  key TEXT PRIMARY KEY,
+  value JSONB,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE zambonini_data DISABLE ROW LEVEL SECURITY;</pre>`;
+    }else if(err.code==='PGRST301'||/jwt|expired|invalid/i.test(err.message||'')){
+      conclusao=`<strong>Causa provável: Chave anon expirada ou inválida.</strong><br>
+      Vá em Supabase → Settings → API → copie a nova chave anon → cole no <code>SUPA_KEY</code> do código (linha 172).`;
+    }else if(/network|fetch/i.test(err.message||'')){
+      conclusao=`<strong>Causa provável: Sem conexão ou Supabase fora do ar.</strong><br>
+      Teste abrir <a href="https://oxtxvfzeowonjsgxkcsn.supabase.co" target="_blank" style="color:var(--or)">${SUPA_URL}</a> no navegador. Se também falhar, é problema de rede.`;
+    }else{
+      conclusao=`Não consegui identificar a causa automaticamente. Mostre o erro acima ao Claude pra ajustar.`;
+    }
+    html+=`<div style="padding:12px 14px;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.45);border-radius:8px;margin-top:6px">
+      <div style="font-size:12px;font-weight:700;color:#facc15;margin-bottom:6px">🩺 Diagnóstico</div>
+      <div style="font-size:11px;color:var(--txm);line-height:1.6">${conclusao}</div>
+    </div>`;
+  }else if(results[1].ok){
+    html+=`<div style="padding:12px 14px;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.45);border-radius:8px;margin-top:6px">
+      <div style="font-size:12px;font-weight:700;color:var(--gr)">✅ Conexão com Supabase funcionando perfeitamente!</div>
+      <div style="font-size:11px;color:var(--txm);margin-top:4px">Se o erro voltar, clique em ↻ Sincronizar pra reenviar tudo.</div>
+    </div>`;
+  }
+
+  html+='</div>';
+  body.innerHTML=html;
+}
+
+// Última falha de sincronização (pra mostrar no diagnóstico)
+window._lastSyncError=null;
 
 async function dbGet(key){
   try{
     const {data,error}=await sb.from('zambonini_data').select('value').eq('key',key).single();
-    if(error||!data)return null;
+    if(error){
+      // Não loga erro "no rows" (PGRST116) que é normal
+      if(error.code!=='PGRST116'){
+        window._lastSyncError={op:'get',key,code:error.code,message:error.message,details:error.details||'',hint:error.hint||''};
+        console.warn('[Supabase GET]',key,error);
+      }
+      return null;
+    }
+    if(!data)return null;
     return data.value;
-  }catch{return null;}
+  }catch(e){
+    window._lastSyncError={op:'get',key,code:'EXCEPTION',message:e.message||String(e)};
+    console.warn('[Supabase GET exception]',key,e);
+    return null;
+  }
 }
 
 async function dbSet(key,value){
@@ -278,19 +415,24 @@ async function dbSet(key,value){
     dataToSave={...value,adsData:{...value.adsData,followersByDay:(value.adsData.followersByDay||[]).slice(-30)}};
   }
   // Tenta 2 vezes com intervalo (Supabase às vezes está dormindo)
+  let lastErr=null;
   for(let attempt=0;attempt<2;attempt++){
     try{
       const {error}=await sb.from('zambonini_data').upsert(
         {key, value:dataToSave, updated_at:new Date().toISOString()},
         {onConflict:'key'}
       );
-      if(!error)return true;
-      console.warn('Supabase save error:',error.message,error.code);
-      if(attempt===0)await new Promise(r=>setTimeout(r,3000)); // aguarda 3s e tenta de novo
+      if(!error){window._lastSyncError=null;return true;}
+      lastErr={op:'set',key,code:error.code,message:error.message,details:error.details||'',hint:error.hint||''};
+      console.warn('[Supabase SET]',key,error);
+      if(attempt===0)await new Promise(r=>setTimeout(r,3000));
     }catch(e){
+      lastErr={op:'set',key,code:'EXCEPTION',message:e.message||String(e)};
+      console.warn('[Supabase SET exception]',key,e);
       if(attempt===0)await new Promise(r=>setTimeout(r,3000));
     }
   }
+  if(lastErr)window._lastSyncError=lastErr;
   return false;
 }
 
