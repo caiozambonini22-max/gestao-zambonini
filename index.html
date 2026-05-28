@@ -150,6 +150,7 @@ select option{background:var(--sf2);}
     <button class="ni" onclick="setTab('estoque')" id="nav-estoque">Estoque <span id="stock-badge" style="display:none;margin-left:4px;background:var(--rd);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:10px;"></span></button>
     <button class="ni" onclick="setTab('fornecedores')" id="nav-fornecedores">Fornecedores</button>
     <button class="ni" onclick="setTab('produtos')" id="nav-produtos">Produtos</button>
+    <button class="ni" onclick="setTab('rankings')" id="nav-rankings">📊 Rankings</button>
     <button class="ni" onclick="setTab('dre')" id="nav-dre">DRE</button>
     <button class="ni" onclick="setTab('cadastros')" id="nav-cadastros">👥 Cadastros</button>
     <button class="ni" onclick="setTab('metricas')" id="nav-metricas">📊 Metricas</button>
@@ -190,7 +191,7 @@ let state = {
   channels: JSON.parse(JSON.stringify(DEF_CH)), nfs: [], stock: [],
   suppliers: [], purchaseOrders: [], orderSeq: 1001,
   deliveryCities: [], motoboys: [], clients: [],
-  categories: [],
+  categories: [], fretes: [],
   config: {gastoAnuncios:'',igFollowers:'',igF7:'',igF30:'',valores:['Venda e Energia!','Atendimento Humanizado!','Foco no Cliente!','Quanto mais voce posta, mais voce vende!','Simples e bem feito resolve!']}
 };
 let saveTimers = {};
@@ -230,15 +231,23 @@ function calcM(order){
 
   // Soma todos os itens (inclui brindes no custo, exclui na receita)
   const items=order.items&&order.items.length>0?order.items:[{productId:order.productId,quantity:order.quantity||1,salePrice:order.salePrice||0,isGift:false}];
-  const rev=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0)+upsell-Number(order.discount||0);
+  // Receita = itens vendidos + upsell + frete cobrado do cliente − desconto
+  const freteClient=Number(order.freteClient||0);
+  const rev=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0)+upsell+freteClient-Number(order.discount||0);
   const cost=items.reduce((a,it)=>{const p=state.prods.find(x=>x.id===it.productId);const si=state.stock.find(s=>s.productId===it.productId);return a+getCost(p,si)*Number(it.quantity||1);},0);
+  // Custo dos upsells: puxa do produto cadastrado (dinâmico)
+  const upsellCost=(order.upsells||[]).reduce((a,u)=>{
+    const p=state.prods.find(x=>x.id===u.productId);
+    const si=state.stock?state.stock.find(s=>s.productId===u.productId):null;
+    return a+getCost(p,si)*Number(u.quantity||1);
+  },0);
 
   // Taxa de maquininha: base de fallback é a receita do pedido (quando há só uma forma de pagamento)
   const fee=sumFees(order.payments,state.maqs,rev);
 
-  const total=cost+mot+cor+fee;
+  const total=cost+upsellCost+mot+cor+fee;
   const profit=rev-total;const roi=total>0?(profit/total)*100:0;
-  return{fee,rev,profit,roi,mot,cor,upsell,cost};
+  return{fee,rev,profit,roi,mot,cor,upsell,cost,upsellCost,freteClient};
 }
 function calcAvg(cq,ca,aq,ac){const t=cq+aq;return t>0?((cq*ca)+(aq*ac))/t:0;}
 
@@ -307,7 +316,7 @@ function save(key){
 
 async function retrySyncAll(){
   setSyncStatus('syncing');
-  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
   let allOk=true;
   for(const k of keys){
     const ok=await dbSet(k,state[k]);
@@ -407,7 +416,7 @@ async function loadAll(){
       el.textContent='Conectando ao servidor... (pode levar até 30s na primeira vez)';
     }
   }, 4000);
-  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
 
   // ── PASSO 1: Carrega localStorage IMEDIATAMENTE (fonte primária) ──
   keys.forEach(k=>{
@@ -490,6 +499,7 @@ function render(){
     case 'estoque': el.innerHTML=renderEstoque();initEstoqueChart();break;
     case 'fornecedores': el.innerHTML=renderFornecedores();break;
     case 'produtos': el.innerHTML=renderProdutos();break;
+    case 'rankings': el.innerHTML=renderRankings();break;
     case 'dre': el.innerHTML=renderDRE();break;
     case 'cadastros': el.innerHTML=renderCadastros();break;
     case 'metricas': el.innerHTML=renderMetricas();break;
@@ -542,9 +552,14 @@ function renderDashboard(){
   const filtered=getFiltered();
   const allM=filtered.map(o=>calcM(o));
   const totalRev=allM.reduce((a,m)=>a+m.rev,0);
-  const totalProfit=allM.reduce((a,m)=>a+m.profit,0);
+  const totalProfit=allM.reduce((a,m)=>a+m.profit,0); // líquido (após taxas, fretes, etc)
   const totalMot=allM.reduce((a,m)=>a+m.mot,0);
   const totalCor=allM.reduce((a,m)=>a+m.cor,0);
+  const totalFee=allM.reduce((a,m)=>a+(m.fee||0),0);
+  const totalCMV=allM.reduce((a,m)=>a+m.cost+(m.upsellCost||0),0); // custo dos produtos (inclui brindes e upsells)
+  const totalLucroBruto=totalRev-totalCMV; // antes de taxas/fretes
+  const totalMargemBruta=totalRev>0?(totalLucroBruto/totalRev)*100:0;
+  const totalMargemLiquida=totalRev>0?(totalProfit/totalRev)*100:0;
   const ticketMedio=filtered.length>0?totalRev/filtered.length:0;
   // ── Quantidade de smartwatches vendidos no período ──
   // Identifica smartwatch pela categoria (nome contém watch/relógio/smart) ou pelo nome do produto.
@@ -756,14 +771,14 @@ function renderDashboard(){
   <div class="g4" style="margin-bottom:16px">
     <div class="card" style="border-color:rgba(249,115,22,.25)"><div class="ct">Faturamento Total</div><div class="cv cv-or">${fmtBRL(totalRev)}</div><div class="cs">${periodLabel}</div></div>
     <div class="card" style="border-color:rgba(34,197,94,.2)"><div class="ct">Ticket Medio</div><div class="cv cv-gr">${fmtBRL(ticketMedio)}</div><div class="cs">media por pedido</div></div>
-    <div class="card" style="border-color:rgba(59,130,246,.2)"><div class="ct">Numero de Pedidos</div><div class="cv cv-bl">${filtered.length}</div><div class="cs">no periodo</div></div>
-    <div class="card"><div class="ct">Lucro</div><div class="cv ${totalProfit>=0?'cv-gr':'cv-rd'}">${fmtBRL(totalProfit)}</div><div class="cs">${totalRev>0?fmtPct((totalProfit/totalRev)*100):'0%'} margem</div></div>
+    <div class="card" style="border-color:rgba(34,197,94,.4)" title="Receita - custo dos produtos. Antes de taxas, fretes e outros."><div class="ct">Lucro Bruto</div><div class="cv ${totalLucroBruto>=0?'cv-gr':'cv-rd'}">${fmtBRL(totalLucroBruto)}</div><div class="cs">${fmtPct(totalMargemBruta)} margem bruta</div></div>
+    <div class="card" style="border-color:rgba(168,85,247,.4)" title="Lucro Bruto - taxas - fretes - subsídios. O que sobra de verdade."><div class="ct">Lucro Líquido</div><div class="cv ${totalProfit>=0?'cv-gr':'cv-rd'}">${fmtBRL(totalProfit)}</div><div class="cs">${fmtPct(totalMargemLiquida)} margem líquida</div></div>
   </div>
   <div class="g4" style="margin-bottom:16px">
     <div class="card" style="border-color:rgba(168,85,247,.25)"><div class="ct">⌚ Smartwatches Vendidos</div><div class="cv" style="color:#a855f7">${swCount}</div><div class="cs">unidades em ${periodLabel}</div></div>
     <div class="card" style="border-color:rgba(59,130,246,.25)"><div class="ct">🎯 Anúncio por Venda (CAC)</div><div class="cv cv-bl">${cacPorVenda===null?'—':fmtBRL(cacPorVenda)}</div><div class="cs">${cacPorVenda===null?'só hoje / mês atual':'gasto Meta ÷ '+filtered.length+' vendas'}</div></div>
     <div class="card" style="border-color:rgba(239,68,68,.2)"><div class="ct">💸 Custo Cheio por Venda</div><div class="cv cv-rd">${filtered.length>0?fmtBRL(custoCheioPorVenda):'—'}</div><div class="cs">produto+frete+taxa${adSpendValid?'+anúncio':''}</div></div>
-    <div class="card"><div class="ct">Frete Total</div><div class="cv cv-rd">${fmtBRL(totalMot+totalCor)}</div><div class="cs">entregas no período</div></div>
+    <div class="card" style="border-color:rgba(59,130,246,.2)"><div class="ct">Numero de Pedidos</div><div class="cv cv-bl">${filtered.length}</div><div class="cs">${fmtBRL(totalMot+totalCor)} de frete · ${fmtBRL(totalFee)} de taxa</div></div>
   </div>
   ${presOrders.length>0?`<div style="padding:12px 16px;background:var(--ordim);border:1px solid var(--bdb);border-radius:8px;margin-bottom:16px;display:flex;gap:12px;align-items:center"><span style="font-size:18px">🏪</span><div><div style="font-weight:700">Loja Fisica: <span style="color:var(--or)">${presOrders.length} pedidos</span></div><div style="font-size:11px;color:var(--txm)">${fmtBRL(presOrders.reduce((a,o)=>a+calcM(o).rev,0))} — ${fmtPct((presOrders.length/filtered.length)*100)} do total</div></div></div>`:''}
   <div class="g2" style="margin-bottom:16px">
@@ -980,7 +995,7 @@ let orderModalData=null;
 function newOrderDefaults(){
   const fmq=state.maqs.length>0?state.maqs[0].id:'';
   const fch=state.channels.length>0?state.channels[0].id:'';
-  return{date:new Date().toISOString().slice(0,10),clientName:'',cpfCnpj:'',phone:'',email:'',tipoPessoa:'fisica',contribuinte:'nao',street:'',streetNum:'',complement:'',bairro:'',cep:'',city:'',state:'',diffDeliveryAddr:false,deliveryStreet:'',deliveryStreetNum:'',deliveryComplement:'',deliveryBairro:'',deliveryCep:'',deliveryCity:'',deliveryState:'',productId:'',quantity:1,salePrice:'',discountType:'valor',discountVal:'',payments:[{id:uid(),type:'pix',maquininhaId:fmq,mode:'presencial',installments:1,amount:''}],deliveryMethod:'sedex',trackingCode:'',motoboyCost:'',correiosCost:'',motoboyId:'',motoboyName:'',fuelCost:'',tollCost:'',discount:'',channel:fch,isPresencial:false,status:'em_aberto',notes:'',internalNotes:'',upsells:[],postActions:{nf:false,sep:false,rastreio:false,entregue:false}};
+  return{date:new Date().toISOString().slice(0,10),clientName:'',cpfCnpj:'',phone:'',email:'',tipoPessoa:'fisica',contribuinte:'nao',street:'',streetNum:'',complement:'',bairro:'',cep:'',city:'',state:'',diffDeliveryAddr:false,deliveryStreet:'',deliveryStreetNum:'',deliveryComplement:'',deliveryBairro:'',deliveryCep:'',deliveryCity:'',deliveryState:'',productId:'',quantity:1,salePrice:'',discountType:'valor',discountVal:'',payments:[{id:uid(),type:'pix',maquininhaId:fmq,mode:'presencial',installments:1,amount:''}],deliveryMethod:'sedex',trackingCode:'',motoboyCost:'',correiosCost:'',motoboyId:'',motoboyName:'',fuelCost:'',tollCost:'',freteClient:'',discount:'',channel:fch,isPresencial:false,status:'em_aberto',notes:'',internalNotes:'',upsells:[],postActions:{nf:false,sep:false,rastreio:false,entregue:false}};
 }
 
 function openNewOrder(){orderModalData={...newOrderDefaults(),_isNew:true};showOrderModal();}
@@ -1037,7 +1052,7 @@ function showOrderModal(){
   const el=document.getElementById('main-content');
   window._formScroll=window.scrollY||window.pageYOffset||0;
   if(el){el.innerHTML=renderOrderModal();}
-  setTimeout(()=>{window.scrollTo(0,window._formScroll||0);initCityAutocompletes();updateOrderSummary();},0);
+  setTimeout(()=>{window.scrollTo(0,window._formScroll||0);initCityAutocompletes();updateOrderSummary();if(typeof renderUpsellList==='function')renderUpsellList();},0);
 }
 
 function renderOrderModal(){
@@ -1050,7 +1065,8 @@ function renderOrderModal(){
   const itemsTotal=_items.reduce((a,item)=>item.isGift?a:a+Number(item.salePrice||0)*Number(item.quantity||1),0);
   const st=itemsTotal;
   const ut=(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0);
-  const baseRev=st+ut;
+  const freteClientR=Number(o.freteClient||0);
+  const baseRev=st+ut+freteClientR;
   let discountAmt=0;
   if(o.discountType==='pct'&&o.discountVal){discountAmt=baseRev*(Number(o.discountVal)/100);}
   else{discountAmt=Number(o.discount||o.discountVal||0);}
@@ -1065,8 +1081,8 @@ function renderOrderModal(){
   let channelOptions='';state.channels.forEach(c=>{channelOptions+=`<option value="${c.id}" ${o.channel===c.id?'selected':''}>${esc(c.label)}</option>`;});
   let statusOptions='';OS.forEach(s=>{statusOptions+=`<option value="${s.id}" ${o.status===s.id?'selected':''}>${s.label}</option>`;});
   let dlvOptions='';DLV.forEach(d=>{dlvOptions+=`<option value="${d.id}" ${o.deliveryMethod===d.id?'selected':''}>${d.icon} ${d.label}</option>`;});
+  // upsells são renderizados via renderUpsellList() após o modal carregar (botões de excluir + editar preço)
   let upsellRows='';
-  (o.upsells||[]).forEach(u=>{const up=state.prods.find(p=>p.id===u.productId);const nm=u.productId==='_c'?(u.customName||'Extra'):(up?up.name:'Extra');upsellRows+=`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;background:var(--sf2);border-radius:5px;margin-top:4px"><span>${esc(nm)}</span><span style="color:var(--gr)">${fmtBRL(u.price)}</span></div>`;});
   const usSSOpts=[{v:'',l:''},{v:'_c',l:'✏️ Digitar produto...'},...state.prods.map(p=>({v:p.id,l:p.name}))];
   const usOnSelect=`ufProdChange(__VAL__);`;
   let paysHTML='';
@@ -1143,9 +1159,10 @@ function renderOrderModal(){
             </select></div>
             <div class="field"><label>Inscrição Estadual</label><input value="${esc(o.inscEstadual||'')}" oninput="setOrderField('inscEstadual',this.value)" placeholder="Opcional"></div>
           </div>`:''}
-          <div style="display:grid;grid-template-columns:3fr 90px 1fr 1.5fr 55px 140px;gap:8px">
+          <div style="display:grid;grid-template-columns:3fr 90px 1.4fr 1.4fr 1.5fr 55px 140px;gap:8px">
             <div class="field"><label>Rua / Endereço de Cobrança</label><input value="${esc(o.street||'')}" oninput="setOrderField('street',this.value)"></div>
             <div class="field"><label>Número</label><input value="${esc(o.streetNum||'')}" oninput="setOrderField('streetNum',this.value)"></div>
+            <div class="field"><label>Bairro</label><input value="${esc(o.bairro||'')}" oninput="setOrderField('bairro',this.value)"></div>
             <div class="field"><label>Complemento</label><input value="${esc(o.complement||'')}" oninput="setOrderField('complement',this.value)"></div>
             <div class="field"><label>Cidade</label><input id="order-city" value="${esc(o.city)}" oninput="setOrderField('city',this.value);onCityInput('order-state',this.value)" autocomplete="off"></div>
             <div class="field"><label>UF</label><input id="order-state" value="${esc(o.state)}" oninput="setOrderField('state',this.value)" maxlength="2" style="text-transform:uppercase"></div>
@@ -1163,9 +1180,10 @@ function renderOrderModal(){
           </div>
           ${o.diffDeliveryAddr?`<div style="margin-top:10px;padding:12px;background:var(--sf3);border-radius:8px;border:1px solid var(--bd)">
             <div class="sl" style="margin-bottom:8px">Endereço de Entrega</div>
-            <div style="display:grid;grid-template-columns:3fr 90px 1fr 1.5fr 55px 140px;gap:8px">
+            <div style="display:grid;grid-template-columns:3fr 90px 1.4fr 1.4fr 1.5fr 55px 140px;gap:8px">
               <div class="field"><label>Rua</label><input value="${esc(o.deliveryStreet||'')}" oninput="setOrderField('deliveryStreet',this.value)"></div>
               <div class="field"><label>Número</label><input value="${esc(o.deliveryStreetNum||'')}" oninput="setOrderField('deliveryStreetNum',this.value)"></div>
+              <div class="field"><label>Bairro</label><input value="${esc(o.deliveryBairro||'')}" oninput="setOrderField('deliveryBairro',this.value)"></div>
               <div class="field"><label>Complemento</label><input value="${esc(o.deliveryComplement||'')}" oninput="setOrderField('deliveryComplement',this.value)"></div>
               <div class="field"><label>Cidade</label><input id="order-del-city" value="${esc(o.deliveryCity||'')}" oninput="setOrderField('deliveryCity',this.value);onCityInput('order-del-state',this.value)" autocomplete="off"></div>
               <div class="field"><label>UF</label><input value="${esc(o.deliveryState||'')}" oninput="setOrderField('deliveryState',this.value.toUpperCase().slice(0,2))" maxlength="2"></div>
@@ -1295,7 +1313,22 @@ function renderOrderModal(){
 function showWATab(){document.getElementById('wa-panel').style.display='';document.getElementById('dados-panel').style.display='none';}
 function showDadosTab(){document.getElementById('wa-panel').style.display='none';document.getElementById('dados-panel').style.display='';}
 function closeOrderModal(){orderModalData=null;currentTab='pedidos';document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));const np=document.getElementById('nav-pedidos');if(np)np.classList.add('active');render();}
-function setOrderField(k,v){if(!orderModalData)return;orderModalData[k]=v;}
+function setOrderField(k,v){
+  if(!orderModalData)return;
+  orderModalData[k]=v;
+  // Auto-preenche frete (custo motoboy + valor cobrado do cliente) quando a cidade muda
+  if(k==='city'&&typeof applyFreteFromCity==='function'){
+    const before={mot:orderModalData.motoboyCost,fc:orderModalData.freteClient};
+    applyFreteFromCity(v);
+    const changed=before.mot!==orderModalData.motoboyCost||before.fc!==orderModalData.freteClient;
+    if(changed){
+      // Atualiza apenas o resumo lateral; evita re-render completo para não perder foco do campo
+      if(typeof updateOrderSummary==='function')updateOrderSummary();
+      const m=document.querySelector('input[oninput*="motoboyCost"]');if(m&&orderModalData.motoboyCost)m.value=orderModalData.motoboyCost;
+      const fc=document.querySelector('input[oninput*="freteClient"]');if(fc&&orderModalData.freteClient)fc.value=orderModalData.freteClient;
+    }
+  }
+}
 function selectProduct(id){
   if(!orderModalData)return;
   const p=state.prods.find(x=>x.id===id);
@@ -1354,10 +1387,11 @@ function renderDeliverySection(o){
     var horarios=['','08h','09h','10h','11h','12h','13h','14h','15h','16h','17h','18h','19h','20h','21h','22h','Negociar','Sem prazo'];
     var horDeOpts=horarios.map(function(h){return'<option value="'+h+'"'+(o.deliveryFrom===h?' selected':'')+'>'+( h||'— A partir de —')+'</option>';}).join('');
     var horOpts=horarios.map(function(h){return'<option value="'+h+'"'+(o.deliveryUntil===h?' selected':'')+'>'+( h||'— Até que horas? —')+'</option>';}).join('');
-    html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 95px 95px 95px;gap:8px">';
+    html+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 90px 90px 90px;gap:8px">';
     html+='<div class="field"><label>Motoboy</label><select onchange="setOrderField(\'motoboyId\',this.value);var mb=state.motoboys.find(x=>x.id===this.value);if(mb)setOrderField(\'motoboyName\',mb.name);refreshDelivery()">'+mbOpts+'</select></div>';
     html+=(o.motoboyId==='_avulso'?'<div class="field"><label>Nome</label><input value="'+esc(o.motoboyName||'')+'" oninput="setOrderField(\'motoboyName\',this.value)" placeholder="Nome do motoboy"></div>':'<div></div>');
-    html+='<div class="field"><label>Valor Frete</label><div class="ip"><span class="ips">R$</span><input type="number" value="'+(o.motoboyCost||'')+'" oninput="setOrderField(\'motoboyCost\',this.value);updateOrderSummary()" placeholder="0,00"></div></div>';
+    html+='<div class="field"><label style="color:var(--rd)">Custo motoboy</label><div class="ip"><span class="ips">R$</span><input type="number" step="0.01" value="'+(o.motoboyCost||'')+'" oninput="setOrderField(\'motoboyCost\',this.value);updateOrderSummary()" placeholder="0,00"></div></div>';
+    html+='<div class="field"><label style="color:var(--gr)">Cobrado cliente</label><div class="ip"><span class="ips">R$</span><input type="number" step="0.01" value="'+(o.freteClient||'')+'" oninput="setOrderField(\'freteClient\',this.value);updateOrderSummary()" placeholder="0,00"></div></div>';
     html+='<div class="field"><label>Rastreio/Info</label><input value="'+esc(o.trackingCode||'')+'" oninput="setOrderField(\'trackingCode\',this.value)"></div>';
     html+='<div class="field"><label>🕐 A partir de</label><select onchange="setOrderField(\'deliveryFrom\',this.value)">'+horDeOpts+'</select></div>';
     html+='<div class="field"><label>🕐 Entregar até</label><select onchange="setOrderField(\'deliveryUntil\',this.value)">'+horOpts+'</select></div>';
@@ -1497,8 +1531,7 @@ function addUpsell(){
   const displayName=pid==='_c'?customName:(prod?(prod.name+(varVal?' — '+varVal:'')):customName);
   orderModalData.upsells.push({id:uid(),productId:pid,variacaoName:varVal,price,customName:displayName});
   updateOrderSummary();
-  const ul=document.getElementById('upsell-list');
-  if(ul)ul.innerHTML=(orderModalData.upsells||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 8px;background:var(--sf2);border-radius:5px;margin-top:4px"><span>${esc(u.customName||u.productId)}</span><span style="color:var(--gr)">${fmtBRL(u.price)}</span></div>`).join('');
+  renderUpsellList();
   const priceEl=document.getElementById('uf-price');if(priceEl)priceEl.value='';
   if(cn)cn.value='';
   const varWrap=document.getElementById('uf-var-wrap');if(varWrap)varWrap.style.display='none';
@@ -1507,7 +1540,33 @@ function addUpsell(){
   // Reset search select
   const inp=document.getElementById('ss-uf-prod');if(inp)inp.value='';
 }
-function removeUpsell(id){if(!orderModalData)return;orderModalData.upsells=(orderModalData.upsells||[]).filter(u=>u.id!==id);showOrderModal();}
+function renderUpsellList(){
+  const ul=document.getElementById('upsell-list');
+  if(!ul||!orderModalData)return;
+  const list=orderModalData.upsells||[];
+  if(list.length===0){ul.innerHTML='';return;}
+  ul.innerHTML=list.map(u=>{
+    const p=state.prods.find(x=>x.id===u.productId);
+    const si=state.stock?state.stock.find(s=>s.productId===u.productId):null;
+    const c=getCost(p,si)*Number(u.quantity||1);
+    return `<div style="display:flex;align-items:center;gap:6px;font-size:11px;padding:5px 8px;background:var(--sf2);border-radius:5px;margin-top:4px">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">⬆️ ${esc(u.customName||u.productId)}${c>0?` <span style="color:var(--txd);font-size:9px">(custo ${fmtBRL(c)})</span>`:''}</span>
+      <span style="display:inline-flex;align-items:center;gap:2px"><span style="color:var(--txd);font-size:9px">R$</span><input type="number" step="0.01" value="${Number(u.price||0)}" oninput="editUpsellPrice('${u.id}',this.value)" style="width:62px;background:var(--sf3);border:1px solid var(--bd);border-radius:4px;color:var(--gr);font-weight:600;padding:2px 5px;font-size:11px;text-align:right"></span>
+      <button onclick="removeUpsell('${u.id}')" title="Remover upsell" style="background:none;border:none;cursor:pointer;color:var(--rd);font-size:14px;padding:0 4px;line-height:1">×</button>
+    </div>`;
+  }).join('');
+}
+function editUpsellPrice(id,v){
+  if(!orderModalData)return;
+  orderModalData.upsells=(orderModalData.upsells||[]).map(u=>u.id===id?{...u,price:v}:u);
+  updateOrderSummary();
+}
+function removeUpsell(id){
+  if(!orderModalData)return;
+  orderModalData.upsells=(orderModalData.upsells||[]).filter(u=>u.id!==id);
+  renderUpsellList();
+  updateOrderSummary();
+}
 function changePayType(idx,type){if(!orderModalData)return;syncItemsFromDOM();const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments[idx]=Object.assign({},orderModalData.payments[idx],{type,maquininhaId:fmq,mode:'presencial',installments:1});showOrderModal();}
 function changePayField(idx,k,v){if(!orderModalData)return;syncItemsFromDOM();orderModalData.payments[idx][k]=v;showOrderModal();}
 function addPay(){if(!orderModalData)return;syncItemsFromDOM();const fmq=state.maqs.length>0?state.maqs[0].id:'';orderModalData.payments.push({id:uid(),type:'pix',maquininhaId:fmq,mode:'presencial',installments:1,amount:''});showOrderModal();}
@@ -1565,13 +1624,14 @@ function parseWA(){
 // Helper: calcula total real do pedido somando todos os itens
 function getOrderTotal(o){
   if(!o)return 0;
+  const frete=Number(o.freteClient||0);
   const items=o.items&&o.items.length>0?o.items:null;
   if(items){
     const itemTotal=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0);
     const upTotal=(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0);
-    return itemTotal+upTotal-Number(o.discount||0);
+    return itemTotal+upTotal+frete-Number(o.discount||0);
   }
-  return Number(o.salePrice||0)*Number(o.quantity||1)+(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0)-Number(o.discount||0);
+  return Number(o.salePrice||0)*Number(o.quantity||1)+(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0)+frete-Number(o.discount||0);
 }
 
 function saveOrder(){
@@ -2397,19 +2457,23 @@ function receivePO(pid){
 }
 function openPOModal(){
   let supOpts='<option value="">Selecione...</option>';state.suppliers.forEach(s=>{supOpts+=`<option value="${s.id}">${esc(s.name)}</option>`;});
-  let prodOpts='<option value="">Selecione...</option>';state.prods.forEach(p=>{prodOpts+=`<option value="${p.id}">${esc(p.name)}</option>`;});
   const overlay=document.createElement('div');overlay.className='overlay';
-  overlay.innerHTML=`<div class="modal modal-md"><div class="mt2">Novo Pedido de Compra</div><div class="fg"><div class="fr"><div class="field"><label>Fornecedor</label><select id="po-sup">${supOpts}</select></div><div class="field"><label>Data</label><input type="date" id="po-date" value="${new Date().toISOString().slice(0,10)}"></div></div><div id="po-items"><div class="po-item" style="display:grid;grid-template-columns:1fr 90px 110px;gap:8px;align-items:end;background:var(--sf3);border-radius:7px;padding:10px;margin-bottom:7px"><div class="field"><label>Produto</label><select class="po-prod">${prodOpts}</select></div><div class="field"><label>Qtd</label><input type="number" class="po-qty"></div><div class="field"><label>Custo Unit.</label><div class="ip"><span class="ips">R$</span><input type="number" class="po-cost"></div></div></div></div><button class="btn bg2" onclick="addPOItem()" style="margin-top:4px">+ Produto</button></div><div class="mf"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button><button class="btn bp" onclick="savePO()">Salvar</button></div></div>`;
+  const firstProdSS=makeProdSearchSelect('po-prod-0','');
+  overlay.innerHTML=`<div class="modal modal-md"><div class="mt2">Novo Pedido de Compra</div><div class="fg"><div class="fr"><div class="field"><label>Fornecedor</label><select id="po-sup">${supOpts}</select></div><div class="field"><label>Data</label><input type="date" id="po-date" value="${new Date().toISOString().slice(0,10)}"></div></div><div id="po-items"><div class="po-item" style="display:grid;grid-template-columns:1fr 90px 110px;gap:8px;align-items:end;background:var(--sf3);border-radius:7px;padding:10px;margin-bottom:7px"><div class="field"><label>Produto</label>${firstProdSS}</div><div class="field"><label>Qtd</label><input type="number" class="po-qty"></div><div class="field"><label>Custo Unit.</label><div class="ip"><span class="ips">R$</span><input type="number" class="po-cost"></div></div></div></div><button class="btn bg2" onclick="addPOItem()" style="margin-top:4px">+ Produto</button></div><div class="mf"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button><button class="btn bp" onclick="savePO()">Salvar</button></div></div>`;
   overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};document.body.appendChild(overlay);
 }
 function addPOItem(){
-  let prodOpts='<option value="">Selecione...</option>';state.prods.forEach(p=>{prodOpts+=`<option value="${p.id}">${esc(p.name)}</option>`;});
+  const idx=document.querySelectorAll('.po-item').length;
   const item=document.createElement('div');item.className='po-item';item.style.cssText='display:grid;grid-template-columns:1fr 90px 110px;gap:8px;align-items:end;background:var(--sf3);border-radius:7px;padding:10px;margin-bottom:7px';
-  item.innerHTML=`<div class="field"><label>Produto</label><select class="po-prod">${prodOpts}</select></div><div class="field"><label>Qtd</label><input type="number" class="po-qty"></div><div class="field"><label>Custo Unit.</label><div class="ip"><span class="ips">R$</span><input type="number" class="po-cost"></div></div>`;
+  item.innerHTML=`<div class="field"><label>Produto</label>${makeProdSearchSelect('po-prod-'+idx,'')}</div><div class="field"><label>Qtd</label><input type="number" class="po-qty"></div><div class="field"><label>Custo Unit.</label><div class="ip"><span class="ips">R$</span><input type="number" class="po-cost"></div></div>`;
   document.getElementById('po-items').appendChild(item);
 }
 function savePO(){
-  const items=[...document.querySelectorAll('.po-item')].map(el=>({productId:el.querySelector('.po-prod').value,qty:el.querySelector('.po-qty').value,unitCost:el.querySelector('.po-cost').value})).filter(i=>i.productId&&i.qty);
+  const items=[...document.querySelectorAll('.po-item')].map(el=>({
+    productId:(el.querySelector('.prod-ss-wrap')||{}).getAttribute?el.querySelector('.prod-ss-wrap').getAttribute('data-prod-val'):'',
+    qty:el.querySelector('.po-qty').value,
+    unitCost:el.querySelector('.po-cost').value
+  })).filter(i=>i.productId&&i.qty);
   if(!items.length)return;
   state.purchaseOrders=[{id:uid(),supplierId:document.getElementById('po-sup').value,date:document.getElementById('po-date').value,items,status:'pendente',createdAt:new Date().toISOString()},...state.purchaseOrders];
   save('purchaseOrders');document.querySelector('.overlay').remove();render();
@@ -2643,13 +2707,17 @@ function renderProdModal(){
   // Kit section
   let kitHTML = '';
   if(f.tipo === 'kit'){
-    let prodOpts = '<option value="">Selecione um produto...</option>';
-    state.prods.filter(p=>p.id!==f.id&&p.tipo!=='kit').forEach(p=>{prodOpts+=`<option value="${p.id}">${esc(p.name)}</option>`;});
+    const kitOpts=state.prods.filter(p=>p.id!==f.id&&p.tipo!=='kit').map(p=>({v:p.id,l:p.name}));
     kitHTML = `<div style="padding:14px;background:var(--sf3);border-radius:8px;border:1px solid var(--bd)">
       <div class="sl" style="margin-bottom:10px">Componentes do Kit</div>
       <div style="font-size:11px;color:var(--txd);margin-bottom:10px">Combine produtos do catálogo para formar este kit/combo.</div>
-      ${f.kitItems.map((item,ki)=>{const kp=state.prods.find(p=>p.id===item.productId);return `<div style="display:grid;grid-template-columns:1fr 80px auto;gap:8px;align-items:end;margin-bottom:8px;background:var(--sf2);border-radius:7px;padding:10px;border:1px solid var(--bd)">
-        <div class="field"><label>Produto</label><select onchange="prodModalData.kitItems[${ki}].productId=this.value;renderProdModal()">${prodOpts.replace(`value="${item.productId}"`,`value="${item.productId}" selected`)}</select></div>
+      ${f.kitItems.map((item,ki)=>{
+        const kp=state.prods.find(p=>p.id===item.productId);
+        const ssOpts=[{v:'',l:'-- Selecione um produto --'},...kitOpts];
+        const ssId='kit-'+ki;
+        const ssLabel=kp?kp.name:'';
+        return `<div style="display:grid;grid-template-columns:1fr 80px auto;gap:8px;align-items:end;margin-bottom:8px;background:var(--sf2);border-radius:7px;padding:10px;border:1px solid var(--bd)">
+        <div class="field"><label>Produto</label>${makeSearchSelect(ssId,item.productId||'',ssOpts,`prodModalData.kitItems[${ki}].productId=__VAL__;renderProdModal();`)}</div>
         <div class="field"><label>Qtd</label><input type="number" min="1" value="${item.qty||1}" oninput="prodModalData.kitItems[${ki}].qty=Number(this.value)"></div>
         <button class="btn bd2 sm" style="align-self:flex-end" onclick="removeKitItem(${ki})">×</button>
       </div>`;}).join('')}
@@ -2986,8 +3054,22 @@ function filterSS(id,q){
 }
 function selectSS(id,val,lbl){
   const input=document.getElementById('ss-'+id);
-  if(input){input.value=lbl;}
+  if(input){
+    input.value=lbl;
+    // Sobe até prod-ss-wrap se existir, senão usa o pai imediato
+    const wrap=input.closest('.prod-ss-wrap')||input.parentElement;
+    if(wrap)wrap.setAttribute('data-prod-val',val);
+  }
   closeSS(id);
+}
+// Helper para selects de produto com busca em qualquer contexto (sem callback custom).
+// Renderiza um wrapper com data-prod-val que pode ser lido por outros forms (compras, kits, etc).
+function makeProdSearchSelect(id,selectedId,extraOpts){
+  const opts=[{v:'',l:'-- Selecione --'},...(extraOpts||[]),...state.prods.map(p=>({v:p.id,l:p.name}))];
+  // Usa o onSelectCode vazio porque já gravamos no data-prod-val do wrapper via selectSS
+  const ss=makeSearchSelect(id,selectedId||'',opts,'');
+  // Pré-define o data-prod-val no wrapper (envolvemos o makeSearchSelect num span com a marca)
+  return `<div class="prod-ss-wrap" data-prod-val="${selectedId||''}">${ss}</div>`;
 }
 
 // ============ AUTOCOMPLETE CIDADE ============
@@ -3038,7 +3120,210 @@ function pickCity2(stateId,nome,uf){
   const d=document.getElementById('_cdrop2');if(d)d.style.display='none';
 }
 function initCityAutocompletes(){}
-// ============ DRE ============
+// ============ RANKINGS DE PRODUTOS ============
+let rkPeriod='month',rkDay=null,rkMonth=null,rkYear=null,rkCustomDe=null,rkCustomAte=null;
+let rkSort='units',rkSortDir='desc'; // colunas: units, revenue, cost, profit, margin
+
+function getRankingOrders(){
+  // Inicializa defaults
+  if(!rkDay)rkDay=localDate(0);
+  if(rkMonth===null)rkMonth=new Date().getMonth();
+  if(rkYear===null)rkYear=new Date().getFullYear();
+  if(!rkCustomDe)rkCustomDe=localDate(-7);
+  if(!rkCustomAte)rkCustomAte=localDate(0);
+  return state.orders.filter(o=>{
+    if(!o.date)return false;
+    if(rkPeriod==='day')return o.date===rkDay;
+    if(rkPeriod==='yesterday')return o.date===localDate(-1);
+    if(rkPeriod==='7d'){const ini=localDate(-6);return o.date>=ini&&o.date<=localDate(0);}
+    if(rkPeriod==='week'){const ini=localDate(-6);return o.date>=ini&&o.date<=localDate(0);}
+    if(rkPeriod==='month'){const d=new Date(o.date);return d.getMonth()===rkMonth&&d.getFullYear()===rkYear;}
+    if(rkPeriod==='year'){const d=new Date(o.date);return d.getFullYear()===rkYear;}
+    if(rkPeriod==='custom'){
+      let de=rkCustomDe,ate=rkCustomAte;
+      if(de>ate){const t=de;de=ate;ate=t;}
+      return o.date>=de&&o.date<=ate;
+    }
+    return false;
+  });
+}
+
+function aggregateByProduct(orders){
+  // Agrega vendas por productId: soma unidades (não-brinde), receita, custo. Inclui itens E upsells.
+  const agg={};
+  function add(productId,qty,salePrice,costUnit){
+    if(!productId)return;
+    if(!agg[productId])agg[productId]={productId,units:0,revenue:0,cost:0,giftUnits:0};
+    agg[productId].units+=qty;
+    agg[productId].revenue+=salePrice*qty;
+    agg[productId].cost+=costUnit*qty;
+  }
+  function addGift(productId,qty,costUnit){
+    if(!productId)return;
+    if(!agg[productId])agg[productId]={productId,units:0,revenue:0,cost:0,giftUnits:0};
+    agg[productId].giftUnits+=qty;
+    agg[productId].cost+=costUnit*qty; // brinde tem custo mas zero receita
+  }
+  orders.forEach(o=>{
+    const items=o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}];
+    items.forEach(it=>{
+      const p=state.prods.find(x=>x.id===it.productId);
+      if(!p)return;
+      const si=state.stock?state.stock.find(s=>s.productId===it.productId):null;
+      const cu=getCost(p,si);
+      const qty=Number(it.quantity||1);
+      if(it.isGift)addGift(it.productId,qty,cu);
+      else add(it.productId,qty,Number(it.salePrice||0),cu);
+    });
+    (o.upsells||[]).forEach(u=>{
+      const p=state.prods.find(x=>x.id===u.productId);
+      if(!p)return;
+      const si=state.stock?state.stock.find(s=>s.productId===u.productId):null;
+      const cu=getCost(p,si);
+      add(u.productId,Number(u.quantity||1),Number(u.price||0),cu);
+    });
+  });
+  // Computa lucro e margem por produto
+  return Object.values(agg).map(a=>{
+    const profit=a.revenue-a.cost;
+    const margin=a.revenue>0?(profit/a.revenue)*100:0;
+    return {...a,profit,margin};
+  });
+}
+
+function rkPeriodLabel(){
+  if(rkPeriod==='day')return rkDay===localDate(0)?'Hoje':rkDay===localDate(-1)?'Ontem':rkDay;
+  if(rkPeriod==='yesterday')return 'Ontem';
+  if(rkPeriod==='7d')return 'Últimos 7 dias';
+  if(rkPeriod==='week')return 'Esta semana';
+  if(rkPeriod==='month')return MESES[rkMonth]+' '+rkYear;
+  if(rkPeriod==='year')return String(rkYear);
+  if(rkPeriod==='custom')return rkCustomDe+' → '+rkCustomAte;
+  return '';
+}
+
+function setRkSort(col){
+  if(rkSort===col){rkSortDir=rkSortDir==='desc'?'asc':'desc';}
+  else{rkSort=col;rkSortDir='desc';}
+  render();
+}
+
+function renderRankings(){
+  const orders=getRankingOrders();
+  const rows=aggregateByProduct(orders);
+  // Ordena pela coluna selecionada
+  rows.sort((a,b)=>{
+    const va=a[rkSort]||0,vb=b[rkSort]||0;
+    return rkSortDir==='desc'?vb-va:va-vb;
+  });
+
+  // Totais agregados do período
+  const totUnits=rows.reduce((a,r)=>a+r.units,0);
+  const totRev=rows.reduce((a,r)=>a+r.revenue,0);
+  const totCost=rows.reduce((a,r)=>a+r.cost,0);
+  const totProfit=totRev-totCost;
+  const totMargin=totRev>0?(totProfit/totRev)*100:0;
+
+  // Botões de período
+  const periodBtns=[
+    ['day','Hoje'],['yesterday','Ontem'],['7d','7 dias'],['week','Esta Semana'],
+    ['month','Este Mês'],['year','Este Ano'],['custom','Personalizado']
+  ].map(([p,l])=>`<button class="ptab ${rkPeriod===p?'active':''}" onclick="rkPeriod='${p}';render()">${l}</button>`).join('');
+
+  // Cabeçalhos clicáveis pra sort
+  const arrow=(col)=>rkSort===col?(rkSortDir==='desc'?' ▼':' ▲'):'';
+  const th=(col,label,align)=>`<th onclick="setRkSort('${col}')" style="cursor:pointer;text-align:${align||'left'};user-select:none" title="Ordenar por ${label}">${label}${arrow(col)}</th>`;
+
+  let tbody='';
+  if(rows.length===0){
+    tbody=`<tr><td colspan="6"><div class="empty"><div class="empty-ic">📊</div><p>Nenhuma venda no período selecionado.</p></div></td></tr>`;
+  }else{
+    rows.forEach((r,i)=>{
+      const p=state.prods.find(x=>x.id===r.productId);
+      const nm=p?p.name:'(produto removido)';
+      const rank=i+1;
+      const rankColor=rank===1?'#facc15':rank===2?'#cbd5e1':rank===3?'#fb923c':'var(--txd)';
+      tbody+=`<tr>
+        <td style="font-weight:700;color:${rankColor};width:32px">#${rank}</td>
+        <td style="font-weight:600">${esc(nm)}${r.giftUnits>0?` <span style="font-size:9px;color:var(--txd)">(+${r.giftUnits} brinde${r.giftUnits>1?'s':''})</span>`:''}</td>
+        <td style="text-align:right;font-weight:700;color:var(--bl)">${r.units}</td>
+        <td style="text-align:right;color:var(--or)">${fmtBRL(r.revenue)}</td>
+        <td style="text-align:right;color:var(--rd)">${fmtBRL(r.cost)}</td>
+        <td style="text-align:right;font-weight:700;color:${r.profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(r.profit)}</td>
+        <td style="text-align:right;color:${r.margin>=0?'var(--gr)':'var(--rd)'}">${fmtPct(r.margin)}</td>
+      </tr>`;
+    });
+  }
+
+  // Top 3 visual em cards (compactos)
+  const top3=rows.slice(0,3);
+  let top3HTML='';
+  if(top3.length>0){
+    const medals=['🥇','🥈','🥉'];
+    top3.forEach((r,i)=>{
+      const p=state.prods.find(x=>x.id===r.productId);
+      const nm=p?p.name:'—';
+      top3HTML+=`<div class="card" style="border-left:3px solid ${i===0?'#facc15':i===1?'#cbd5e1':'#fb923c'}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:22px">${medals[i]}</span><div style="font-size:10px;color:var(--txd);text-transform:uppercase;letter-spacing:.5px">${i===0?'Mais vendido':i===1?'2º lugar':'3º lugar'}</div></div>
+        <div style="font-weight:700;font-size:13px;margin-bottom:8px;line-height:1.3">${esc(nm)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+          <div><div style="color:var(--txd);font-size:9px;text-transform:uppercase">Unidades</div><div style="color:var(--bl);font-weight:700">${r.units}</div></div>
+          <div><div style="color:var(--txd);font-size:9px;text-transform:uppercase">Lucro</div><div style="color:${r.profit>=0?'var(--gr)':'var(--rd)'};font-weight:700">${fmtBRL(r.profit)}</div></div>
+        </div>
+      </div>`;
+    });
+  }
+
+  return `
+  <div class="pf">
+    <div style="display:flex;gap:4px;flex-wrap:wrap">${periodBtns}</div>
+    ${rkPeriod==='month'?`<div style="display:flex;gap:4px;align-items:center">
+      <select onchange="rkMonth=Number(this.value);render()" style="width:125px">${MESES.map((m,i)=>`<option value="${i}" ${i===rkMonth?'selected':''}>${m}</option>`).join('')}</select>
+      <select onchange="rkYear=Number(this.value);render()" style="width:85px">${Array.from({length:6},(_,i)=>new Date().getFullYear()-3+i).map(y=>`<option ${y===rkYear?'selected':''}>${y}</option>`).join('')}</select>
+    </div>`:''}
+    ${rkPeriod==='year'?`<select onchange="rkYear=Number(this.value);render()" style="width:95px">${Array.from({length:6},(_,i)=>new Date().getFullYear()-3+i).map(y=>`<option ${y===rkYear?'selected':''}>${y}</option>`).join('')}</select>`:''}
+    ${rkPeriod==='day'?`<input type="date" value="${rkDay}" max="${localDate(0)}" onchange="rkDay=this.value;render()" style="width:150px">`:''}
+    ${rkPeriod==='custom'?`<div style="display:flex;gap:8px;align-items:flex-end">
+      <div class="field" style="margin:0"><label style="font-size:9px">De</label><input type="date" value="${rkCustomDe}" onchange="rkCustomDe=this.value;render()" style="width:140px"></div>
+      <div class="field" style="margin:0"><label style="font-size:9px">Até</label><input type="date" value="${rkCustomAte}" onchange="rkCustomAte=this.value;render()" style="width:140px"></div>
+    </div>`:''}
+    <div style="margin-left:auto;font-size:12px;color:var(--txd)"><span style="color:var(--or);font-weight:700">${rkPeriodLabel()}</span> · ${orders.length} pedido${orders.length===1?'':'s'}</div>
+  </div>
+
+  <!-- Totais do período -->
+  <div class="g4" style="margin-bottom:16px">
+    <div class="card"><div class="ct">Unidades Vendidas</div><div class="cv cv-bl">${totUnits}</div><div class="cs">em ${rkPeriodLabel()}</div></div>
+    <div class="card"><div class="ct">Receita</div><div class="cv cv-or">${fmtBRL(totRev)}</div><div class="cs">de produtos</div></div>
+    <div class="card"><div class="ct">Custo</div><div class="cv cv-rd">${fmtBRL(totCost)}</div><div class="cs">CMV produtos</div></div>
+    <div class="card"><div class="ct">Lucro Bruto</div><div class="cv ${totProfit>=0?'cv-gr':'cv-rd'}">${fmtBRL(totProfit)}</div><div class="cs">${fmtPct(totMargin)} margem</div></div>
+  </div>
+
+  ${top3.length>0?`<div class="g3" style="margin-bottom:16px">${top3HTML}</div>`:''}
+
+  <!-- Tabela completa -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--bd);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-weight:700">Ranking completo</div>
+        <div style="font-size:11px;color:var(--txd)">Clique nas colunas para reordenar. Brindes não contam como unidades vendidas, mas o custo deles entra no cálculo do pedido em que apareceram.</div>
+      </div>
+    </div>
+    <div class="tw"><table>
+      <thead><tr>
+        <th style="width:32px">#</th>
+        <th>Produto</th>
+        ${th('units','Unidades','right')}
+        ${th('revenue','Receita','right')}
+        ${th('cost','Custo','right')}
+        ${th('profit','Lucro','right')}
+        ${th('margin','Margem','right')}
+      </tr></thead>
+      <tbody>${tbody}</tbody>
+    </table></div>
+  </div>`;
+}
+
+
 let dreMes=new Date().getMonth(), dreAno=new Date().getFullYear();
 let dreExtras={outrosR:'',mktg:'',aluguel:'',folha:'',fixas:'',outros:'',impostos:''};
 
@@ -3095,9 +3380,10 @@ function updateOrderSummary(){
   const o=orderModalData;
   const items=o.items&&o.items.length>0?o.items:[{productId:o.productId,quantity:o.quantity||1,salePrice:o.salePrice||0,isGift:false}];
   const ut=(o.upsells||[]).reduce((a,u)=>a+Number(u.price||0),0);
-  // Receita: só itens pagos (não brindes)
+  // Receita: só itens pagos (não brindes) + upsell + frete cobrado − desconto
   const st=items.reduce((a,it)=>it.isGift?a:a+Number(it.salePrice||0)*Number(it.quantity||1),0);
-  const rev=st+ut-Number(o.discount||0);
+  const freteClient=Number(o.freteClient||0);
+  const rev=st+ut+freteClient-Number(o.discount||0);
   // Custo: TODOS os itens incluindo brindes
   const custoItens=items.map(it=>{
     const p=state.prods.find(x=>x.id===it.productId);
@@ -3105,13 +3391,21 @@ function updateOrderSummary(){
     return getCost(p,si)*Number(it.quantity||1);
   });
   const ctotal=custoItens.reduce((a,c)=>a+c,0);
+  // Custo dos upsells (puxa do produto cadastrado)
+  const custoUpsells=(o.upsells||[]).reduce((a,u)=>{
+    const p=state.prods.find(x=>x.id===u.productId);
+    const si=state.stock?state.stock.find(s=>s.productId===u.productId):null;
+    return a+getCost(p,si)*Number(u.quantity||1);
+  },0);
   // Custo só dos brindes (para destacar no resumo)
   const custoBrindes=items.reduce((a,it,i)=>it.isGift?a+custoItens[i]:a,0);
   // Custo de entrega: motoboy + correios + combustível + pedágio
   const entrega=Number(o.motoboyCost||0)+Number(o.correiosCost||0)+Number(o.fuelCost||0)+Number(o.tollCost||0);
   const mot=Number(o.motoboyCost||0);const cor=Number(o.correiosCost||0);
+  // Subsídio de frete = quanto o cliente paga MENOS o que o motoboy custa (negativo se você banca)
+  const subsidioFrete=freteClient-Number(o.motoboyCost||0);
   const fee=sumFees(o.payments,state.maqs,rev);
-  const td=ctotal+entrega+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
+  const td=ctotal+custoUpsells+entrega+fee;const profit=rev-td;const roi=td>0?(profit/td)*100:0;
   const s=document.getElementById('order-summary');
   if(!s)return;
   // Mostra custo por item
@@ -3125,9 +3419,13 @@ function updateOrderSummary(){
   s.innerHTML=`<div style="font-size:11px;line-height:1.9">
     ${itemLines?`<div style="margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--bd)">${itemLines}</div>`:''}
     <div>Receita: <strong style="color:var(--or)">${fmtBRL(rev)}</strong></div>
+    ${ut>0?`<div style="font-size:10px;color:var(--txd)">↳ inclui ⬆️ upsell: <strong style="color:var(--gr)">+${fmtBRL(ut)}</strong></div>`:''}
+    ${freteClient>0?`<div style="font-size:10px;color:var(--txd)">↳ inclui 🛵 frete cobrado: <strong style="color:var(--gr)">+${fmtBRL(freteClient)}</strong></div>`:''}
     ${custoBrindes>0?`<div style="font-size:10px;color:var(--txd)">↳ inclui 🎁 brindes: <strong style="color:var(--rd)">−${fmtBRL(custoBrindes)}</strong></div>`:''}
+    ${custoUpsells>0?`<div style="font-size:10px;color:var(--txd)">↳ custo upsell: <strong style="color:var(--rd)">−${fmtBRL(custoUpsells)}</strong></div>`:''}
     ${fee>0?`<div style="font-size:10px;color:var(--txd)">↳ taxa maquininha: <strong style="color:var(--rd)">−${fmtBRL(fee)}</strong></div>`:''}
-    ${entrega>0?`<div style="font-size:10px;color:var(--txd)">↳ entrega/frete: <strong style="color:var(--rd)">−${fmtBRL(entrega)}</strong></div>`:''}
+    ${entrega>0?`<div style="font-size:10px;color:var(--txd)">↳ custo entrega: <strong style="color:var(--rd)">−${fmtBRL(entrega)}</strong></div>`:''}
+    ${(freteClient>0||Number(o.motoboyCost||0)>0)&&subsidioFrete!==0?`<div style="font-size:10px;color:var(--txd)">↳ subsidio frete: <strong style="color:${subsidioFrete>=0?'var(--gr)':'var(--rd)'}">${subsidioFrete>=0?'+':'−'}${fmtBRL(Math.abs(subsidioFrete))}</strong></div>`:''}
     <div>Custo total: <strong style="color:var(--rd)">${fmtBRL(td)}</strong></div>
     <div>Lucro: <strong style="color:${profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(profit)}</strong></div>
     <div>ROI: <strong style="color:${roi>=0?'var(--gr)':'var(--rd)'}">${fmtPct(roi)}</strong></div>
@@ -3653,7 +3951,7 @@ async function forcSync(){
   if(btn){ btn.textContent='⏳ Conectando...'; btn.disabled=true; }
   setSyncStatus('syncing');
 
-  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
   try{
     const results = await Promise.all(keys.map(async k=>{
       const v = await dbGet(k);
@@ -3688,7 +3986,7 @@ async function forcSync(){
 
 // ============ BACKUP & RESTORE ============
 function exportBackup(){
-  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+  const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
   const backup={
     version: '2.0',
     exportedAt: new Date().toISOString(),
@@ -3729,7 +4027,7 @@ function importBackup(input){
       );
       if(!confirm_import){ input.value=''; return; }
 
-      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
       keys.forEach(k=>{
         if(backup.data[k] !== undefined){
           state[k] = backup.data[k];
@@ -3770,7 +4068,7 @@ function showToast(msg, type){
 setInterval(()=>{
   if(state.orders && state.orders.length > 0){
     try{
-      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories'];
+      const keys=['prods','orders','maqs','channels','nfs','stock','suppliers','purchaseOrders','orderSeq','deliveryCities','config','motoboys','clients','categories','fretes'];
       const backup={version:'2.0',exportedAt:new Date().toISOString(),data:{}};
       keys.forEach(k=>{backup.data[k]=state[k];});
       localStorage.setItem('zb_backup_auto', JSON.stringify(backup));
@@ -3788,7 +4086,7 @@ if(checkSession()){loadAll();}else{showLoginScreen();}
 let cadTab='clientes';
 
 function renderCadastros(){
-  const tabs=[{id:'clientes',l:'👤 Clientes'},{id:'motoboys',l:'🛵 Motoboys'},{id:'fornecedores',l:'🏭 Fornecedores'},{id:'maquininhas',l:'💳 Maquininhas'}];
+  const tabs=[{id:'clientes',l:'👤 Clientes'},{id:'motoboys',l:'🛵 Motoboys'},{id:'fretes',l:'🗺️ Fretes por Cidade'},{id:'fornecedores',l:'🏭 Fornecedores'},{id:'maquininhas',l:'💳 Maquininhas'}];
   let tabBtns=tabs.map(t=>`<button class="ptab ${cadTab===t.id?'active':''}" onclick="cadTab='${t.id}';render()">${t.l}</button>`).join('');
 
   let content='';
@@ -3810,6 +4108,30 @@ function renderCadastros(){
       cards+=`<div class="su-c"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="display:flex;align-items:center;gap:10px"><div style="width:40px;height:40px;border-radius:50%;background:var(--or);display:flex;align-items:center;justify-content:center;font-size:18px">🛵</div><div><div style="font-weight:700;font-size:14px">${esc(m.name)}</div><div style="font-size:11px;color:var(--txd)">${esc(m.phone||'—')}</div></div></div><div style="display:flex;gap:5px"><button class="btn bg2 sm" onclick="openMotoboyModal('${m.id}')">Edit</button><button class="btn bd2 sm" onclick="deleteMotoboy('${m.id}')">×</button></div></div><div style="height:1px;background:var(--bd);margin:10px 0"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px"><div><div style="color:var(--txd);font-size:9px;text-transform:uppercase">Entregas</div><div style="font-weight:600;color:var(--or)">${deliveries.length}</div></div><div><div style="color:var(--txd);font-size:9px;text-transform:uppercase">Total pago</div><div style="font-weight:600;color:var(--rd)">${fmtBRL(total)}</div></div>${m.pix?`<div><div style="color:var(--txd);font-size:9px;text-transform:uppercase">PIX</div><div>${esc(m.pix)}</div></div>`:''}</div></div>`;
     });
     content=`<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn bp" onclick="openMotoboyModal(null)">+ Novo Motoboy</button></div>${state.motoboys.length===0?'<div class="empty"><div class="empty-ic">🛵</div><p>Nenhum motoboy cadastrado</p></div>':`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">${cards}</div>`}`;
+  }
+  else if(cadTab==='fretes'){
+    const fretes=(state.fretes||[]).slice().sort((a,b)=>(a.cidade||'').localeCompare(b.cidade||''));
+    let rows='';
+    fretes.forEach(f=>{
+      const subsidio=Number(f.custoReal||0)-Number(f.valorCobrado||0);
+      const col=subsidio>0?'var(--rd)':subsidio<0?'var(--gr)':'var(--txm)';
+      const lbl=subsidio>0?`−${fmtBRL(subsidio)}`:subsidio<0?`+${fmtBRL(-subsidio)}`:'R$ 0,00';
+      rows+=`<tr>
+        <td style="font-weight:600">${esc(f.cidade)}${f.uf?`<span style="color:var(--txd);font-weight:400"> / ${esc(f.uf)}</span>`:''}</td>
+        <td style="color:var(--rd)">${fmtBRL(Number(f.custoReal||0))}</td>
+        <td style="color:var(--gr)">${fmtBRL(Number(f.valorCobrado||0))}</td>
+        <td style="color:${col};font-weight:600" title="${subsidio>0?'Voce banca a diferenca':subsidio<0?'Voce lucra no frete':'Sem subsidio'}">${lbl}</td>
+        <td><button class="btn bg2 sm" onclick="openFreteModal('${f.id}')">Edit</button> <button class="btn bd2 sm" onclick="deleteFrete('${f.id}')">×</button></td>
+      </tr>`;
+    });
+    content=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:11px;color:var(--txd);max-width:560px;line-height:1.5">Cadastre o <strong style="color:var(--rd)">custo real</strong> (o que voce paga ao motoboy) e o <strong style="color:var(--gr)">valor cobrado</strong> do cliente. Quando criar um pedido para a cidade, o sistema preenche os dois automaticamente.</div>
+      <button class="btn bp" onclick="openFreteModal(null)">+ Nova Cidade</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden"><div class="tw"><table>
+      <thead><tr><th>Cidade</th><th>Custo motoboy</th><th>Cobrado cliente</th><th>Subsidio/lucro</th><th></th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="5"><div class="empty"><div class="empty-ic">🗺️</div><p>Nenhuma cidade cadastrada. Clique em <strong>+ Nova Cidade</strong> para comecar.</p></div></td></tr>'}</tbody>
+    </table></div></div>`;
   }
   else if(cadTab==='fornecedores'){
     cadTab='fornecedores';content=renderFornecedores();
@@ -3879,6 +4201,65 @@ function saveMotoboy(existingId){
   save('motoboys');document.querySelector('.overlay').remove();render();
 }
 function deleteMotoboy(id){if(confirm('Remover?')){state.motoboys=state.motoboys.filter(m=>m.id!==id);save('motoboys');render();}}
+
+// ============ FRETES POR CIDADE ============
+function openFreteModal(id){
+  const f=id?(state.fretes||[]).find(x=>x.id===id):null;
+  const old=document.querySelector('.overlay');if(old)old.remove();
+  const ov=document.createElement('div');ov.className='overlay';
+  ov.innerHTML=`<div class="modal" style="max-width:480px">
+    <div class="modal-header"><h2>${f?'Editar':'Nova'} cidade</h2><button class="btn bg2 sm" onclick="this.closest('.overlay').remove()">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>Cidade *</label><input id="fr-cid" value="${f?esc(f.cidade):''}" placeholder="Sertaozinho" autofocus></div>
+      <div style="display:grid;grid-template-columns:1fr 100px;gap:10px">
+        <div class="field"><label>UF</label><input id="fr-uf" value="${f?esc(f.uf||'SP'):'SP'}" maxlength="2" style="text-transform:uppercase"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field"><label style="color:var(--rd)">Custo motoboy (o que voce paga)</label><div class="ip"><span class="ips">R$</span><input id="fr-custo" type="number" step="0.01" value="${f?Number(f.custoReal||0):''}" placeholder="50,00"></div></div>
+        <div class="field"><label style="color:var(--gr)">Cobrado do cliente</label><div class="ip"><span class="ips">R$</span><input id="fr-cobrado" type="number" step="0.01" value="${f?Number(f.valorCobrado||0):''}" placeholder="25,00"></div></div>
+      </div>
+      <div style="background:var(--sf3);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--txd);line-height:1.5">💡 A diferenca entre o custo e o valor cobrado e seu <strong>subsidio</strong> (sai do seu lucro). Se o cobrado for maior que o custo, voce lucra no frete.</div>
+    </div>
+    <div class="modal-footer"><button class="btn bg2" onclick="this.closest('.overlay').remove()">Cancelar</button><button class="btn bp" onclick="saveFreteModal('${id||''}')">Salvar</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  setTimeout(()=>{const i=document.getElementById('fr-cid');if(i)i.focus();},50);
+}
+function saveFreteModal(id){
+  const cidade=document.getElementById('fr-cid').value.trim();
+  if(!cidade){alert('Informe a cidade');return;}
+  const uf=(document.getElementById('fr-uf').value||'').trim().toUpperCase().slice(0,2);
+  const custoReal=Number(document.getElementById('fr-custo').value||0);
+  const valorCobrado=Number(document.getElementById('fr-cobrado').value||0);
+  state.fretes=state.fretes||[];
+  // Evita duplicada (mesma cidade+uf)
+  const dup=state.fretes.find(x=>x.id!==id&&x.cidade.toLowerCase().trim()===cidade.toLowerCase()&&(x.uf||'').toUpperCase()===uf);
+  if(dup){alert('Ja existe um frete cadastrado para esta cidade.');return;}
+  if(id){state.fretes=state.fretes.map(x=>x.id===id?{...x,cidade,uf,custoReal,valorCobrado}:x);}
+  else{state.fretes.push({id:uid(),cidade,uf,custoReal,valorCobrado});}
+  save('fretes');
+  document.querySelector('.overlay').remove();
+  render();
+}
+function deleteFrete(id){if(confirm('Remover esta cidade da tabela de fretes?')){state.fretes=(state.fretes||[]).filter(x=>x.id!==id);save('fretes');render();}}
+// Busca frete cadastrado para uma cidade (case-insensitive, ignora acentos)
+function findFreteByCity(cidade){
+  if(!cidade)return null;
+  const norm=s=>(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
+  const target=norm(cidade);
+  return (state.fretes||[]).find(f=>norm(f.cidade)===target)||null;
+}
+// Aplica frete da cidade no pedido em edição (sem sobrescrever valores já preenchidos manualmente)
+function applyFreteFromCity(cidade,opts){
+  if(!orderModalData)return;
+  opts=opts||{};
+  const f=findFreteByCity(cidade);
+  if(!f)return;
+  // Só preenche se estiver vazio (não sobrescreve edição manual), a menos que opts.force=true
+  if(opts.force||!orderModalData.motoboyCost){orderModalData.motoboyCost=String(f.custoReal||0);}
+  if(opts.force||!orderModalData.freteClient){orderModalData.freteClient=String(f.valorCobrado||0);}
+}
+
 </script>
 <script>
 // ============ MAQUININHAS PERSONALIZADAS ============
