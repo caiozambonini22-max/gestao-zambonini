@@ -4073,7 +4073,6 @@ function updateOrderSummary(){
     ${custoUpsells>0?`<div style="font-size:10px;color:var(--txd)">↳ custo upsell: <strong style="color:var(--rd)">−${fmtBRL(custoUpsells)}</strong></div>`:''}
     ${fee>0?`<div style="font-size:10px;color:var(--txd)">↳ taxa maquininha: <strong style="color:var(--rd)">−${fmtBRL(fee)}</strong></div>`:''}
     ${entrega>0?`<div style="font-size:10px;color:var(--txd)">↳ custo entrega: <strong style="color:var(--rd)">−${fmtBRL(entrega)}</strong></div>`:''}
-    ${(freteClient>0||Number(o.motoboyCost||0)>0)&&subsidioFrete!==0?`<div style="font-size:10px;color:var(--txd)">↳ subsidio frete: <strong style="color:${subsidioFrete>=0?'var(--gr)':'var(--rd)'}">${subsidioFrete>=0?'+':'−'}${fmtBRL(Math.abs(subsidioFrete))}</strong></div>`:''}
     <div>Custo total: <strong style="color:var(--rd)">${fmtBRL(td)}</strong></div>
     <div>Lucro: <strong style="color:${profit>=0?'var(--gr)':'var(--rd)'}">${fmtBRL(profit)}</strong></div>
     <div>ROI: <strong style="color:${roi>=0?'var(--gr)':'var(--rd)'}">${fmtPct(roi)}</strong></div>
