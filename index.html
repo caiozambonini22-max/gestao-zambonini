@@ -205,6 +205,14 @@ const fmtPct = v => Number(v||0).toFixed(2)+'%';
 const uid = () => Math.random().toString(36).slice(2,10);
 // Data local (YYYY-MM-DD) no fuso do browser — nunca usa UTC direto
 function localDate(offsetDays){const d=new Date();if(offsetDays)d.setDate(d.getDate()+offsetDays);return d.toLocaleDateString('fr-CA');}
+// Parse 'YYYY-MM-DD' como data LOCAL (não UTC). new Date('YYYY-MM-DD') interpreta como UTC, o que causa bug de fuso (-3h no Brasil).
+function parseDate(s){
+  if(!s)return new Date();
+  if(typeof s!=='string')return new Date(s);
+  const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m)return new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+  return new Date(s);
+}
 const localToday=()=>localDate(0);
 const stInfo = id => OS.find(s=>s.id===id)||OS[0];
 const nfInfo = id => NS.find(s=>s.id===id)||NS[0];
@@ -783,7 +791,7 @@ function getFiltered(){
       const ini=localDate(-6);const fim=localDate(0);
       return o.date>=ini&&o.date<=fim;
     }
-    const d=new Date(o.date);
+    const d=parseDate(o.date);
     if(dashPeriod==='month')return d.getMonth()===dashMonth&&d.getFullYear()===dashYear;
     return d.getFullYear()===dashYear;
   });
@@ -3737,8 +3745,8 @@ function getRankingOrders(){
     if(rkPeriod==='yesterday')return o.date===localDate(-1);
     if(rkPeriod==='7d'){const ini=localDate(-6);return o.date>=ini&&o.date<=localDate(0);}
     if(rkPeriod==='week'){const ini=localDate(-6);return o.date>=ini&&o.date<=localDate(0);}
-    if(rkPeriod==='month'){const d=new Date(o.date);return d.getMonth()===rkMonth&&d.getFullYear()===rkYear;}
-    if(rkPeriod==='year'){const d=new Date(o.date);return d.getFullYear()===rkYear;}
+    if(rkPeriod==='month'){const d=parseDate(o.date);return d.getMonth()===rkMonth&&d.getFullYear()===rkYear;}
+    if(rkPeriod==='year'){const d=parseDate(o.date);return d.getFullYear()===rkYear;}
     if(rkPeriod==='custom'){
       let de=rkCustomDe,ate=rkCustomAte;
       if(de>ate){const t=de;de=ate;ate=t;}
@@ -3975,7 +3983,7 @@ let dreMes=new Date().getMonth(), dreAno=new Date().getFullYear();
 let dreExtras={outrosR:'',mktg:'',aluguel:'',folha:'',fixas:'',outros:'',impostos:''};
 
 function renderDRE(){
-  const fs=state.orders.filter(o=>{const d=new Date(o.date);return d.getMonth()===dreMes&&d.getFullYear()===dreAno;});
+  const fs=state.orders.filter(o=>{const d=parseDate(o.date);return d.getMonth()===dreMes&&d.getFullYear()===dreAno;});
   const allM=fs.map(o=>calcM(o));
   const recRev=allM.reduce((a,m)=>a+(m.rev-m.upsell),0);
   const recUp=allM.reduce((a,m)=>a+m.upsell,0);
@@ -4086,7 +4094,7 @@ function bindOrderEvents(){}
 // ============ METRICAS ============
 function renderMetricas(){
   const now = new Date();
-  const thisMonth = state.orders.filter(o=>{const d=new Date(o.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
+  const thisMonth = state.orders.filter(o=>{const d=parseDate(o.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
   const allTime = state.orders;
 
   // 1. TAXA DE CONVERSAO (leads vs pedidos)
