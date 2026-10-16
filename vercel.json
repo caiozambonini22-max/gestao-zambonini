@@ -1,9 +1,5 @@
 {
   "rewrites": [
     { "source": "/", "destination": "/index.html" }
-  ],
-  "functions": {
-    "api/bling-callback.js": { "runtime": "edge" },
-    "api/bling-proxy.js": { "runtime": "edge" }
-  }
+  ]
 }
