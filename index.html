@@ -4913,7 +4913,8 @@ async function syncProdToBling(){
       origem: Number(f.origemICMS||0),
       ncm: f.ncm,
       cest: f.cest || '',
-      cfop: f.cfop || '5102'
+      cfop: f.cfop || '5102',
+      tipoItem: '00' // 00 = Mercadoria para Revenda (padrão pra produtos revendidos)
     }
   };
 
