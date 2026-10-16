@@ -22,7 +22,9 @@ const BLING_CLIENT_SECRET = process.env.BLING_CLIENT_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-const BLING_API_BASE = 'https://www.bling.com.br/Api/v3';
+// IMPORTANTE: www.bling.com.br é só pra OAuth (login/token).
+// Chamadas de API (produtos, pedidos, NF, etc.) usam api.bling.com.br
+const BLING_API_BASE = 'https://api.bling.com.br/Api/v3';
 
 export default async function handler(req) {
   // CORS pra chamadas do navegador
@@ -72,6 +74,7 @@ export default async function handler(req) {
         'Authorization': `Bearer ${token.access_token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
+        'User-Agent': 'GestaoZambonini-ERP/1.0 (integracao-bling)',
       },
       body: body && method !== 'GET' ? JSON.stringify(body) : undefined,
     });
