@@ -4846,14 +4846,56 @@ async function syncProdToBling(){
   const isUpdate = !!f.blingId;
   showToast(isUpdate?'🔄 Atualizando no Bling...':'📤 Enviando para o Bling...','or');
 
-  // Monta payload mínimo pra API v3 /produtos
+  // Detecta se tem variações (ex: Preto, Prata, Rose Gold)
+  const temVariacoes = f.tipo === 'variacao' && Array.isArray(f.variacoes) && f.variacoes.length > 0;
+
+  // Gera combinações se tiver variações
+  function gerarCombinacoesBling(variacoes){
+    if(!variacoes.length) return [[]];
+    const [primeira, ...resto] = variacoes;
+    const combResto = gerarCombinacoesBling(resto);
+    const result = [];
+    (primeira.opcoes || []).forEach(op => {
+      const valor = typeof op === 'object' ? (op.valor || '') : op;
+      if(!valor) return;
+      combResto.forEach(c => {
+        result.push([{tipo: primeira.nome, valor}, ...c]);
+      });
+    });
+    return result;
+  }
+
+  // Monta array de variações no formato do Bling
+  let variacoesBling = [];
+  if(temVariacoes){
+    const combos = gerarCombinacoesBling(f.variacoes);
+    variacoesBling = combos.map(combo => {
+      const label = combo.map(c => c.valor).join(' / ');
+      const key = combo.map(c => c.valor).join('|');
+      const sd = (f.skuData && f.skuData[key]) || {};
+      return {
+        nome: `${f.name} - ${label}`,
+        codigo: sd.sku || `${f.sku || 'VAR'}-${key.replace(/\|/g, '-')}`,
+        preco: Number(sd.salePrice || f.salePrice) || 0,
+        situacao: sd.disabled ? 'I' : 'A',
+        variacao: {
+          nome: label,
+          ordem: 0,
+          produtoPai: { cloneInfo: true }
+        }
+      };
+    });
+  }
+
+  // Monta payload pra API v3 /produtos
   const payload = {
     nome: f.name,
     codigo: f.sku || '',
     preco: Number(f.salePrice) || 0,
-    tipo: 'P', // Produto
+    tipo: 'P', // Produto (vs. S=Serviço)
     situacao: 'A', // Ativo
-    formato: 'S', // Simples
+    formato: temVariacoes ? 'V' : 'S', // V=Com variação, S=Simples
+    condicao: 1, // 1=Novo, 2=Usado, 3=Recondicionado, 0=Não especificado
     descricaoCurta: (f.descricao||'').slice(0,255),
     unidade: f.unidMedida || 'Un',
     pesoLiquido: Number(f.weightLiq) || 0,
@@ -4874,6 +4916,11 @@ async function syncProdToBling(){
       cfop: f.cfop || '5102'
     }
   };
+
+  // Adiciona variações se houver
+  if(temVariacoes && variacoesBling.length > 0){
+    payload.variacoes = variacoesBling;
+  }
 
   try{
     const r = await fetch(BLING_PROXY,{
