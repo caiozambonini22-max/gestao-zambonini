@@ -1760,6 +1760,10 @@ function renderOrderModal(){
               <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="imprimirComprovante('${o.id||''}')">🖨️ Impressora Térmica</button>
               <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="gerarComprovanteImagem('${o.id||''}')">🖼️ Comprovante Img</button>
             </div>
+            <div style="margin-top:8px">
+              ${o.blingNFId?`<div style="padding:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:6px;font-size:11px;color:var(--gr);margin-bottom:6px">🧾 <strong>NF criada:</strong> #${esc(o.blingNFNumero||o.blingNFId)}${o.blingNFStatus?` · ${esc(o.blingNFStatus)}`:''}</div>`:''}
+              <button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:9px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#3b82f6;font-weight:600" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF no Bling':'🧾 Emitir NF via Bling'}</button>
+            </div>
           </div>`:''}
         </div>
       </div>
@@ -3183,8 +3187,9 @@ function renderProdutos(){
     }
   });
 
-  return `<div style="display:flex;gap:10px;margin-bottom:16px">
-    <input placeholder="Buscar..." value="${esc(prodSearch)}" oninput="prodSearch=this.value;render()" style="flex:1">
+  return `<div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+    <input placeholder="Buscar..." value="${esc(prodSearch)}" oninput="prodSearch=this.value;render()" style="flex:1;min-width:200px">
+    <button class="btn bg2" onclick="preencherFiscaisEmMassa()" title="Preencher NCM/CFOP/CSOSN padrão nos produtos sem dados fiscais" style="font-size:11px">📝 Fiscais em massa</button>
     <button class="btn bp" onclick="openProdModal(null)">+ Novo Produto</button>
   </div>
   <div class="card" style="padding:0;overflow:hidden">
@@ -3215,7 +3220,7 @@ function openProdModal(id){
   prodModalData = p ? JSON.parse(JSON.stringify(p)) : {
     name:'',sku:'',ncm:'',brand:'',costPrice:'',salePrice:'',
     weight:'',weightLiq:'',length:'',width:'',height:'',costMode:'manual',gtin:'',cest:'',origemICMS:'0',unidMedida:'Un',tipoEmbalagem:'Pacote/Caixa',controlarEstoque:'sim',estoqueInicial:'',estoqueMin:'',estoqueMax:'',localizacao:'',diasPreparo:'',
-    cfop:'5102',csosn:'102',blingId:'',
+    cfop:'5102',csosn:'102',blingId:'',emiteNF:true,
     tipo:'simples', // simples | variacao | kit
     variacoes:[], // [{nome:'Cor', opcoes:['Prata','Preto','Dourado']}]
     kitItems:[] // [{productId:'', qty:1}]
@@ -3387,9 +3392,15 @@ function renderProdModal(){
       </div>`}
       <!-- DADOS FISCAIS -->
       <div style="padding:12px;background:var(--sf3);border-radius:8px;border:1px solid var(--bd)">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px;flex-wrap:wrap">
           <div class="sl" style="margin:0">Dados Fiscais (NF-e)</div>
-          ${f.blingId?`<span style="font-size:10px;padding:3px 8px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.4);color:var(--gr);border-radius:12px;font-weight:600">🔗 Bling #${esc(f.blingId)}</span>`:`<span style="font-size:10px;padding:3px 8px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.3);color:var(--or);border-radius:12px;font-weight:600">⚠️ Não sincronizado</span>`}
+          <div style="display:flex;gap:8px;align-items:center">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;padding:4px 10px;border-radius:12px;background:${f.emiteNF!==false?'rgba(34,197,94,.1)':'rgba(249,115,22,.1)'};border:1px solid ${f.emiteNF!==false?'rgba(34,197,94,.3)':'rgba(249,115,22,.3)'};color:${f.emiteNF!==false?'var(--gr)':'var(--or)'};font-weight:600">
+              <input type="checkbox" ${f.emiteNF!==false?'checked':''} onchange="prodModalData.emiteNF=this.checked;renderProdModal()" style="width:14px;height:14px;accent-color:var(--gr);cursor:pointer">
+              ${f.emiteNF!==false?'🧾 Emite NF':'🚫 Não emite NF (brinde/acessório)'}
+            </label>
+            ${f.blingId?`<span style="font-size:10px;padding:3px 8px;background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.4);color:var(--gr);border-radius:12px;font-weight:600">🔗 Bling #${esc(f.blingId)}</span>`:`<span style="font-size:10px;padding:3px 8px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.3);color:var(--or);border-radius:12px;font-weight:600">⚠️ Não sincronizado</span>`}
+          </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
           <div class="field"><label>NCM</label><input value="${esc(f.ncm||'')}" oninput="prodModalData.ncm=this.value" placeholder="Ex: 9102.11.10"></div>
@@ -3487,7 +3498,7 @@ function saveProd(){
     costPrice:Number(f.costPrice||0),salePrice:Number(f.salePrice||0),
     weight:f.weight||'',length:f.length||'',width:f.width||'',height:f.height||'',
     costMode:f.costMode||'manual',gtin:f.gtin||'',cest:f.cest||'',origemICMS:f.origemICMS||'0',unidMedida:f.unidMedida||'Un',tipoEmbalagem:f.tipoEmbalagem||'Pacote/Caixa',controlarEstoque:f.controlarEstoque||'sim',estoqueInicial:f.estoqueInicial||0,estoqueMin:f.estoqueMin||0,estoqueMax:f.estoqueMax||0,localizacao:f.localizacao||'',diasPreparo:f.diasPreparo||0,weightLiq:f.weightLiq||'',descricao:f.descricao||'',obsInterna:f.obsInterna||'',tipo:f.tipo||'simples',
-    cfop:f.cfop||'5102',csosn:f.csosn||'102',blingId:f.blingId||'',
+    cfop:f.cfop||'5102',csosn:f.csosn||'102',blingId:f.blingId||'',emiteNF:f.emiteNF!==false,
     variacoes:f.variacoes||[],kitItems:f.kitItems||[],skuData:f.skuData||{},
     kitDiscount:Number(f.kitDiscount||0),
     categoryId:f.categoryId||null,
@@ -4070,6 +4081,7 @@ function renderConfig(){
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn bp" onclick="connectBling()">${blingConnected?'🔄 Reconectar Bling':'🔌 Conectar ao Bling'}</button>
       ${blingConnected?`<button class="btn bg2" onclick="testBlingConnection()">🧪 Testar conexão</button>`:''}
+      ${blingConnected?`<button class="btn bg2" onclick="syncAllProdsToBling()" style="background:rgba(249,115,22,.15);border-color:rgba(249,115,22,.4);color:var(--or);font-weight:600">📤 Sincronizar TODOS produtos</button>`:''}
       ${blingConnected?`<button class="btn bd2" onclick="disconnectBling()">× Desconectar</button>`:''}
     </div>
     <div style="margin-top:10px;padding:8px 12px;background:var(--sf2);border-radius:6px;font-size:11px;color:var(--txd);line-height:1.5">
@@ -4761,6 +4773,157 @@ function importBackup(input){
   reader.readAsText(file);
 }
 
+// ============ PREENCHER DADOS FISCAIS EM MASSA ============
+function preencherFiscaisEmMassa(){
+  const semNCM = state.prods.filter(p => !p.ncm);
+  if(!semNCM.length){
+    showToast('✅ Todos os produtos já têm NCM preenchido!','gr');
+    return;
+  }
+  // Monta lista de nomes pra visualizar
+  const nomes = semNCM.slice(0,10).map(p => '  • ' + p.name).join('\n');
+  const extra = semNCM.length > 10 ? `\n  ... e mais ${semNCM.length - 10}` : '';
+
+  const ncm = prompt(
+    `${semNCM.length} produtos sem NCM:\n\n${nomes}${extra}\n\n` +
+    `Qual NCM aplicar nestes produtos?\n\n` +
+    `• Smartwatch: 9102.11.10\n` +
+    `• Fone Bluetooth: 8518.30.00\n` +
+    `• Pulseira/Acessório: 9102.12.10\n\n` +
+    `(Digite o NCM. Depois você pode editar manualmente os específicos.)`,
+    '9102.11.10'
+  );
+  if(!ncm) return;
+
+  // Pergunta se vai emitir NF ou não
+  const emiteNF = confirm(
+    `Esses produtos devem EMITIR NF por padrão?\n\n` +
+    `OK = SIM (vão aparecer em NF-e quando vender)\n` +
+    `Cancelar = NÃO (ficam fora da NF por padrão — bom pra pulseira/brinde)`
+  );
+
+  // Aplica em todos sem NCM
+  let count = 0;
+  state.prods = state.prods.map(p => {
+    if(p.ncm) return p;
+    count++;
+    return {
+      ...p,
+      ncm: ncm.trim(),
+      cfop: p.cfop || '5102',
+      csosn: p.csosn || '102',
+      origemICMS: p.origemICMS || '0',
+      unidMedida: p.unidMedida || 'Un',
+      emiteNF: emiteNF
+    };
+  });
+  save('prods');
+  render();
+  showToast(`✅ ${count} produtos atualizados com NCM ${ncm}. ${emiteNF?'Emitem NF.':'NÃO emitem NF (brinde).'}`,'gr');
+}
+
+// ============ SINCRONIZAR TODOS PRODUTOS COM BLING ============
+async function syncAllProdsToBling(){
+  const prods = state.prods.filter(p => !p.blingId); // só os não sincronizados
+  if(!prods.length){
+    showToast('✅ Todos os produtos já estão sincronizados!','gr');
+    return;
+  }
+  const semNCM = prods.filter(p => !p.ncm);
+  if(semNCM.length){
+    if(!confirm(`${semNCM.length} produtos estão SEM NCM (não dá pra sincronizar). Vai sincronizar só os ${prods.length - semNCM.length} que têm NCM. Continuar?`)) return;
+  } else {
+    if(!confirm(`Sincronizar ${prods.length} produtos com o Bling?\n\nIsso pode levar alguns minutos. Não feche a aba durante o processo.`)) return;
+  }
+  const pFiltered = prods.filter(p => p.ncm);
+  if(!pFiltered.length) return showToast('❌ Nenhum produto com NCM pra sincronizar.','rd');
+
+  let ok = 0, erro = 0;
+  const erros = [];
+  for(let i = 0; i < pFiltered.length; i++){
+    const p = pFiltered[i];
+    showToast(`📤 Sincronizando ${i+1}/${pFiltered.length}: ${p.name}...`,'or');
+    try{
+      // Monta payload (igual syncProdToBling)
+      const temVariacoes = p.tipo === 'variacao' && Array.isArray(p.variacoes) && p.variacoes.length > 0;
+      function gerCombos(variacoes){
+        if(!variacoes.length) return [[]];
+        const [primeira, ...resto] = variacoes;
+        const combResto = gerCombos(resto);
+        const result = [];
+        (primeira.opcoes || []).forEach(op => {
+          const valor = typeof op === 'object' ? (op.valor || '') : op;
+          if(!valor) return;
+          combResto.forEach(c => result.push([{tipo: primeira.nome, valor}, ...c]));
+        });
+        return result;
+      }
+      let variacoesBling = [];
+      if(temVariacoes){
+        const combos = gerCombos(p.variacoes);
+        variacoesBling = combos.map(combo => {
+          const label = combo.map(c => c.valor).join(' / ');
+          const key = combo.map(c => c.valor).join('|');
+          const sd = (p.skuData && p.skuData[key]) || {};
+          return {
+            nome: `${p.name} - ${label}`,
+            codigo: sd.sku || `${p.sku || 'VAR'}-${key.replace(/\|/g, '-')}`,
+            preco: Number(sd.salePrice || p.salePrice) || 0,
+            situacao: sd.disabled ? 'I' : 'A',
+            variacao: { nome: label, ordem: 0, produtoPai: { cloneInfo: true } }
+          };
+        });
+      }
+      const payload = {
+        nome: p.name, codigo: p.sku || '', preco: Number(p.salePrice) || 0,
+        tipo: 'P', situacao: 'A', formato: temVariacoes ? 'V' : 'S', condicao: 1,
+        descricaoCurta: (p.descricao||'').slice(0,255), unidade: p.unidMedida || 'Un',
+        pesoLiquido: Number(p.weightLiq) || 0, pesoBruto: Number(p.weight) || 0,
+        gtin: p.gtin || '', marca: p.brand || '',
+        estoque: { minimo: Number(p.estoqueMin)||0, maximo: Number(p.estoqueMax)||0 },
+        dimensoes: {
+          largura: Number(p.width)||0, altura: Number(p.height)||0,
+          profundidade: Number(p.length)||0, unidadeMedida: 1
+        },
+        tributacao: {
+          origem: Number(p.origemICMS||0), ncm: p.ncm,
+          cest: p.cest || '', cfop: p.cfop || '5102', tipoItem: '00'
+        }
+      };
+      if(temVariacoes && variacoesBling.length > 0) payload.variacoes = variacoesBling;
+
+      const r = await fetch(BLING_PROXY, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ method: 'POST', endpoint: '/produtos', body: payload })
+      });
+      const j = await r.json();
+      if(j.ok){
+        const blingId = (j.data && j.data.data && j.data.data.id) || (j.data && j.data.id);
+        if(blingId){
+          state.prods = state.prods.map(x => x.id === p.id ? {...x, blingId: String(blingId)} : x);
+          ok++;
+        } else {
+          erro++; erros.push(`${p.name}: resposta OK mas sem ID`);
+        }
+      } else {
+        erro++;
+        const msg = (j.data && j.data.error && j.data.error.description) || `erro ${j.status}`;
+        erros.push(`${p.name}: ${msg}`);
+      }
+    } catch(e){
+      erro++; erros.push(`${p.name}: ${e.message}`);
+    }
+    // Delay entre requests pra não dar rate limit (300ms)
+    await new Promise(r => setTimeout(r, 300));
+  }
+  save('prods');
+  render();
+  const resumo = `✅ ${ok} sincronizados · ❌ ${erro} com erro${erros.length?'\n\nErros:\n'+erros.slice(0,10).join('\n'):''}`;
+  showToast(`Finalizado: ${ok} ok, ${erro} erros`, ok > erro ? 'gr' : 'rd');
+  alert(resumo);
+}
+
 function showToast(msg, type){
   const existing = document.getElementById('zb-toast');
   if(existing) existing.remove();
@@ -4957,6 +5120,176 @@ async function syncProdToBling(){
   }catch(e){
     showToast('❌ Falha de rede: ' + e.message,'rd');
     console.error('[bling sync]', e);
+  }
+}
+
+// ============ EMITIR NF VIA BLING ============
+// Cria NF em RASCUNHO no Bling a partir de um pedido do ERP
+// NÃO envia pra SEFAZ — você revisa no Bling e autoriza manualmente
+async function emitirNFPedido(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o) return showToast('❌ Pedido não encontrado.','rd');
+
+  // === VALIDAÇÕES ===
+  if(!o.clientName) return showToast('❌ Pedido sem nome do cliente.','rd');
+  if(!o.cpfCnpj) return showToast('❌ Cliente sem CPF/CNPJ. Preenche no pedido.','rd');
+  if(!o.street || !o.cep) return showToast('❌ Endereço incompleto (rua + CEP).','rd');
+
+  // Pega lista completa de itens do pedido
+  const allItems = (o.items && o.items.length) ? o.items : [{productId:o.productId, quantity:o.quantity, salePrice:o.salePrice}];
+  if(!allItems.length) return showToast('❌ Pedido sem produtos.','rd');
+
+  // === FILTRO "EMITE NF" ===
+  // Um item vai pra NF se:
+  //   - O item tem incluirNaNF === true/false (override explícito), OU
+  //   - O produto tem emiteNF !== false (default = true)
+  // Brindes (isGift=true) ficam fora por padrão, mesmo que o produto emita NF.
+  const itemsNF = [];
+  const itemsFora = [];
+  for(const it of allItems){
+    const p = state.prods.find(x => x.id === it.productId);
+    if(!p){ itemsFora.push({nome:'(produto removido)', motivo:'produto não existe'}); continue; }
+    // Override no item
+    let inclui;
+    if(typeof it.incluirNaNF === 'boolean') inclui = it.incluirNaNF;
+    else inclui = (p.emiteNF !== false) && !it.isGift;
+    if(inclui) itemsNF.push({it, p});
+    else itemsFora.push({nome: p.name + (it.isGift?' (brinde)':''), motivo: it.isGift?'brinde':'produto não emite NF'});
+  }
+
+  if(!itemsNF.length){
+    return showToast('❌ Nenhum item do pedido está marcado pra emitir NF.','rd');
+  }
+
+  // Valida que os itens que vão pra NF têm blingId
+  const semBlingId = itemsNF.filter(x => !x.p.blingId).map(x => x.p.name);
+  if(semBlingId.length){
+    return showToast(`❌ Produtos sem Bling ID: ${semBlingId.join(', ')}. Sincroniza primeiro.`,'rd');
+  }
+
+  // Valor da NF = soma dos itens marcados
+  const valorNF = itemsNF.reduce((a,{it}) => a + Number(it.salePrice||0) * Number(it.quantity||1), 0);
+  const totalPedido = getOrderTotal(o);
+
+  // Mensagem de confirmação explicando o que vai/não vai
+  const foraTxt = itemsFora.length ? `\n\n❌ FORA DA NF (${itemsFora.length}):\n` + itemsFora.map(x => `  • ${x.nome} (${x.motivo})`).join('\n') : '';
+  const naTxt = `✅ VAI PRA NF (${itemsNF.length}):\n` + itemsNF.map(({it,p}) => `  • ${p.name} × ${it.quantity||1} = ${fmtBRL(Number(it.salePrice||0)*Number(it.quantity||1))}`).join('\n');
+  const diffTxt = Math.abs(valorNF - totalPedido) > 0.01 ? `\n\n⚠️ Valor NF: ${fmtBRL(valorNF)}  |  Total pedido: ${fmtBRL(totalPedido)}  (diferença fica no ERP, fora da NF)` : '';
+
+  if(!confirm(`Gerar NF em rascunho no Bling pro pedido de ${o.clientName}?\n\n${naTxt}${foraTxt}${diffTxt}\n\nValor da NF: ${fmtBRL(valorNF)}\n\nA NF será criada mas NÃO enviada pra SEFAZ — você revisa no Bling e autoriza manualmente.`)) return;
+
+  showToast('🧾 Gerando NF no Bling...','or');
+
+  // A partir daqui, "items" = só os itens que vão pra NF
+  const items = itemsNF.map(x => x.it);
+
+  // === MONTA PAYLOAD ===
+  const soCpf = (o.cpfCnpj||'').replace(/\D/g,'');
+  const tipoDoc = soCpf.length === 14 ? 'J' : 'F'; // J=Jurídica, F=Física
+  const estadoCliente = (o.state || 'SP').toUpperCase();
+  const dentroDoEstado = estadoCliente === 'SP';
+  const cfopDefault = dentroDoEstado ? '5102' : '6102';
+
+  // Monta itens
+  const itensBling = items.map((it, idx) => {
+    const p = state.prods.find(x => x.id === it.productId);
+    const qtd = Number(it.quantity || 1);
+    const vUnit = Number(it.salePrice || 0);
+    return {
+      codigo: p.sku || `ITEM-${idx+1}`,
+      descricao: p.name,
+      unidade: p.unidMedida || 'Un',
+      quantidade: qtd,
+      valor: vUnit,
+      tipo: 'P',
+      produto: p.blingId ? { id: Number(p.blingId) } : undefined,
+      classificacaoFiscal: p.ncm || '',
+      cfop: dentroDoEstado ? (p.cfop || '5102') : '6102',
+      origem: Number(p.origemICMS || 0)
+    };
+  });
+
+  // Modalidade de frete: 0=emitente(CIF), 1=destinatário(FOB), 9=sem frete
+  const modFrete = (o.correiosCost || o.motoboyCost) ? '0' : '9';
+
+  const payload = {
+    tipo: 1, // 1 = NFe modelo 55 (padrão). 2 = NFCe modelo 65
+    numero: 0, // 0 = Bling atribui próximo número
+    dataOperacao: new Date().toISOString().slice(0,19).replace('T',' '),
+    contato: {
+      nome: o.clientName,
+      tipoPessoa: tipoDoc,
+      numeroDocumento: soCpf,
+      ie: tipoDoc === 'J' ? '' : 'ISENTO',
+      rg: '',
+      email: o.email || '',
+      endereco: {
+        endereco: o.street || '',
+        numero: o.streetNum || 'S/N',
+        complemento: o.complement || '',
+        bairro: o.bairro || '',
+        cep: (o.cep||'').replace(/\D/g,''),
+        municipio: o.city || '',
+        uf: estadoCliente,
+        pais: 'Brasil'
+      },
+      telefone: (o.phone||'').replace(/\D/g,'')
+    },
+    naturezaOperacao: { id: null }, // Bling usa a padrão da conta
+    itens: itensBling,
+    transporte: {
+      fretePorConta: modFrete,
+      transportador: { nome: o.correiosCost ? 'Correios' : '' }
+    },
+    observacoes: o.notes || '',
+    desconto: Number(o.discount || 0) > 0 ? { valor: Number(o.discount), unidade: 'REAL' } : undefined
+  };
+
+  try{
+    const r = await fetch(BLING_PROXY, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        method: 'POST',
+        endpoint: '/nfe',
+        body: payload
+      })
+    });
+    const j = await r.json();
+    if(j.ok){
+      const nfData = (j.data && j.data.data) || j.data || {};
+      const nfId = nfData.id;
+      const nfNumero = nfData.numero || '';
+      const nfSerie = nfData.serie || '';
+      // Salva no pedido
+      state.orders = state.orders.map(ord => ord.id === o.id ? {
+        ...ord,
+        blingNFId: String(nfId),
+        blingNFNumero: nfNumero ? `${nfNumero}/${nfSerie}` : String(nfId),
+        blingNFStatus: 'rascunho'
+      } : ord);
+      save('orders');
+      if(orderModalData && orderModalData.id === o.id){
+        orderModalData.blingNFId = String(nfId);
+        orderModalData.blingNFNumero = nfNumero ? `${nfNumero}/${nfSerie}` : String(nfId);
+        orderModalData.blingNFStatus = 'rascunho';
+        showOrderModal();
+      }
+      showToast(`✅ NF criada! ID: ${nfId}. Abra o Bling pra conferir e autorizar.`,'gr');
+      // Abre o Bling pra validar + autorizar
+      setTimeout(()=>{
+        if(confirm('NF criada em rascunho. Abrir o Bling agora pra conferir e autorizar?')){
+          window.open(`https://www.bling.com.br/notasfiscais.php#list`,'_blank');
+        }
+      }, 500);
+    }else{
+      const errMsg = (j.data && j.data.error && j.data.error.description) || JSON.stringify(j.data).slice(0,300);
+      showToast(`❌ Erro ${j.status}: ${errMsg}`,'rd');
+      console.error('[bling nf]', j);
+    }
+  }catch(e){
+    showToast('❌ Falha de rede: ' + e.message,'rd');
+    console.error('[bling nf]', e);
   }
 }
 
