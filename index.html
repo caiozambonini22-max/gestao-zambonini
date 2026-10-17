@@ -1764,6 +1764,17 @@ function renderOrderModal(){
               ${o.blingNFId?`<div style="padding:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:6px;font-size:11px;color:var(--gr);margin-bottom:6px">🧾 <strong>NF criada:</strong> #${esc(o.blingNFNumero||o.blingNFId)}${o.blingNFStatus?` · ${esc(o.blingNFStatus)}`:''}</div>`:''}
               <button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:9px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#3b82f6;font-weight:600" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF no Bling':'🧾 Emitir NF via Bling'}</button>
             </div>
+            <div style="margin-top:6px">
+              ${o.superfreteId?`<div style="padding:8px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:6px;font-size:11px;color:#10b981;margin-bottom:6px">
+                📮 <strong>Etiqueta ${esc(o.superfreteStatus||'criada')}:</strong> ${o.superfreteTracking?`<span style="font-family:monospace">${esc(o.superfreteTracking)}</span>`:'(sem rastreio ainda)'}
+                ${o.superfreteService?` · ${esc(o.superfreteService)}`:''}
+                ${o.superfretePrintUrl?`<div style="margin-top:4px"><a href="${esc(o.superfretePrintUrl)}" target="_blank" style="color:#10b981;text-decoration:underline">📄 Abrir etiqueta PDF</a></div>`:''}
+              </div>`:''}
+              <div style="display:grid;grid-template-columns:${o.superfreteId?'1fr 1fr':'1fr'};gap:6px">
+                <button class="btn" style="justify-content:center;font-size:12px;padding:9px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.4);color:#10b981;font-weight:600" onclick="gerarEtiquetaSuperFrete('${o.id||''}')">${o.superfreteId?'🔄 Nova Etiqueta':'📮 Gerar Etiqueta SuperFrete'}</button>
+                ${o.superfreteId&&!o.superfreteStatus?`<button class="btn bd2" style="justify-content:center;font-size:11px;padding:9px" onclick="cancelarEtiquetaSuperFrete('${o.id||''}')">× Cancelar</button>`:''}
+              </div>
+            </div>
           </div>`:''}
         </div>
       </div>
@@ -5290,6 +5301,276 @@ async function emitirNFPedido(orderId){
   }catch(e){
     showToast('❌ Falha de rede: ' + e.message,'rd');
     console.error('[bling nf]', e);
+  }
+}
+
+// ============ INTEGRAÇÃO SUPERFRETE ============
+const SUPERFRETE_PROXY = '/api/superfrete-proxy';
+// Padrão de embalagem (do print do usuário na SuperFrete web)
+const SF_PADRAO = { height: 5, width: 12, length: 18, weight: 0.3 };
+const SF_CEP_ORIGEM = '14010080'; // Ribeirão Preto, SP
+// IDs dos serviços SuperFrete
+const SF_SERVICES = {
+  1: 'PAC', 2: 'SEDEX', 17: 'Mini Envios', 3: 'Jadlog', 33: 'J&T'
+};
+
+// Dados fixos do remetente (Zambonini Imports)
+const SF_REMETENTE = {
+  name: 'Zambonini Imports',
+  address: 'Rua Álvares Cabral',
+  complement: 'sala 707',
+  number: '464',
+  district: 'Centro',
+  city: 'Ribeirão Preto',
+  state_abbr: 'SP',
+  postal_code: '14010080',
+  document: '56413364000158' // CNPJ
+};
+
+// Gera etiqueta SuperFrete: calcula → escolhe serviço → cria → paga → baixa PDF
+async function gerarEtiquetaSuperFrete(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o) return showToast('❌ Pedido não encontrado.','rd');
+
+  // === VALIDAÇÕES ===
+  if(!o.clientName) return showToast('❌ Pedido sem nome do cliente.','rd');
+  if(!o.cpfCnpj) return showToast('❌ Cliente sem CPF/CNPJ. Preenche no pedido.','rd');
+  if(!o.street || !o.cep) return showToast('❌ Endereço incompleto (rua + CEP).','rd');
+  if(!o.city || !o.state) return showToast('❌ Pedido sem cidade/UF do cliente.','rd');
+
+  // Endereço de entrega (prefere o diferente, se marcado)
+  const addr = o.diffDeliveryAddr && o.deliveryStreet ? {
+    street: o.deliveryStreet, streetNum: o.deliveryStreetNum, complement: o.deliveryComplement,
+    bairro: o.deliveryBairro, city: o.deliveryCity, state: o.deliveryState, cep: o.deliveryCep
+  } : {
+    street: o.street, streetNum: o.streetNum, complement: o.complement,
+    bairro: o.bairro, city: o.city, state: o.state, cep: o.cep
+  };
+
+  const cepDestino = (addr.cep||'').replace(/\D/g,'');
+  if(cepDestino.length !== 8) return showToast('❌ CEP de destino inválido.','rd');
+
+  // === 1. CALCULA FRETE ===
+  showToast('📦 Calculando frete...','or');
+  const calcRes = await fetch(SUPERFRETE_PROXY, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      method: 'POST',
+      endpoint: '/calculator',
+      body: {
+        from: { postal_code: SF_CEP_ORIGEM },
+        to: { postal_code: cepDestino },
+        services: '1,2,17', // PAC, SEDEX, Mini Envios
+        options: { own_hand: false, receipt: false, insurance_value: 0, use_insurance_value: false },
+        package: { ...SF_PADRAO }
+      }
+    })
+  });
+  const calcJson = await calcRes.json();
+  if(!calcJson.ok){
+    const err = (calcJson.data && (calcJson.data.message || calcJson.data.error)) || JSON.stringify(calcJson.data).slice(0,200);
+    return showToast(`❌ Erro ao calcular: ${err}`,'rd');
+  }
+  const fretes = Array.isArray(calcJson.data) ? calcJson.data : (calcJson.data.data || []);
+  const validos = fretes.filter(f => !f.error && f.price);
+  if(!validos.length){
+    const motivos = fretes.map(f => `${f.name||'?'}: ${f.error||'sem preço'}`).join('\n');
+    return showToast('❌ Nenhum frete disponível pro CEP de destino.\n\n'+motivos,'rd');
+  }
+
+  // === 2. USUÁRIO ESCOLHE SERVIÇO ===
+  const opcoesTxt = validos.map((f,i) => `${i+1}. ${f.name} — R$ ${Number(f.price).toFixed(2)} · ${f.delivery_time||'?'} dias`).join('\n');
+  const escolhaIdx = prompt(`Escolha o serviço de envio:\n\n${opcoesTxt}\n\nDigite o número (1-${validos.length}):`, '1');
+  if(!escolhaIdx) return;
+  const idx = parseInt(escolhaIdx, 10) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= validos.length) return showToast('❌ Opção inválida.','rd');
+  const servico = validos[idx];
+
+  // === 3. PERGUNTA SE USA NF OU DECLARAÇÃO DE CONTEÚDO ===
+  const useNF = o.blingNFKey || o.blingNFNumero || o.blingNFId;
+  let invoiceData = null;
+  if(useNF){
+    const temKey = o.blingNFKey; // Chave de acesso da NF (44 dígitos)
+    if(temKey){
+      invoiceData = { key: temKey };
+    } else {
+      // Tem NF mas não tem chave — pergunta se continua sem invoice ou cancela
+      if(!confirm('⚠️ Esse pedido tem NF no Bling mas sem chave de acesso salva. Vai usar declaração de conteúdo. Continuar?')) return;
+    }
+  }
+
+  // === 4. CRIA ENVIO (/cart) ===
+  showToast('📮 Criando etiqueta...','or');
+  const soCpf = (o.cpfCnpj||'').replace(/\D/g,'');
+  const telefone = (o.phone||'').replace(/\D/g,'');
+  const items = (o.items && o.items.length) ? o.items : [{productId:o.productId, quantity:o.quantity, salePrice:o.salePrice}];
+  const productsList = items.map(it => {
+    const p = state.prods.find(x => x.id === it.productId);
+    return {
+      name: p ? p.name : 'Produto',
+      quantity: Number(it.quantity||1),
+      unitary_value: Number(it.salePrice||0)
+    };
+  }).filter(p => p.name && p.quantity > 0);
+
+  const cartBody = {
+    from: SF_REMETENTE,
+    to: {
+      name: o.clientName,
+      address: addr.street || '',
+      complement: addr.complement || '',
+      number: String(addr.streetNum || ''),
+      district: addr.bairro || 'NA',
+      city: addr.city || '',
+      state_abbr: (addr.state||'SP').toUpperCase(),
+      postal_code: cepDestino,
+      email: o.email || '',
+      phone: telefone,
+      document: soCpf
+    },
+    service: servico.id,
+    products: productsList,
+    volumes: { ...SF_PADRAO },
+    options: {
+      insurance_value: null,
+      receipt: false,
+      own_hand: false,
+      non_commercial: !invoiceData, // true = declaração; false = NF
+      ...(invoiceData ? { invoice: invoiceData } : {}),
+      tag: o.id || '',
+      url: 'https://gestao-zambonini.vercel.app',
+      platform: 'Gestao Zambonini ERP'
+    },
+    platform: 'Gestao Zambonini ERP'
+  };
+
+  const cartRes = await fetch(SUPERFRETE_PROXY, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ method:'POST', endpoint:'/cart', body: cartBody })
+  });
+  const cartJson = await cartRes.json();
+  if(!cartJson.ok){
+    const err = (cartJson.data && (cartJson.data.message || cartJson.data.error)) || JSON.stringify(cartJson.data).slice(0,300);
+    console.error('[superfrete cart]', cartJson);
+    return showToast(`❌ Erro ao criar etiqueta: ${err}`,'rd');
+  }
+  const sfOrder = cartJson.data.data || cartJson.data;
+  const sfOrderId = sfOrder.id;
+  if(!sfOrderId) return showToast('❌ Etiqueta criada mas sem ID retornado.','rd');
+
+  // Salva no pedido (pending)
+  state.orders = state.orders.map(ord => ord.id === o.id ? {
+    ...ord,
+    superfreteId: sfOrderId,
+    superfreteStatus: 'pending',
+    superfreteService: servico.name,
+    superfretePrice: servico.price
+  } : ord);
+  save('orders');
+
+  // === 5. PERGUNTA SE QUER PAGAR AGORA ===
+  const confirmar = confirm(`✅ Etiqueta criada!\n\nServiço: ${servico.name}\nPreço: R$ ${Number(servico.price).toFixed(2)}\n\nFinalizar pagamento agora com saldo da carteira SuperFrete?\n\n(Se cancelar, a etiqueta fica como "pending" e você pode pagar depois clicando em Nova Etiqueta.)`);
+  if(!confirmar){
+    showToast('✅ Etiqueta criada em modo pending. Pague no painel SuperFrete pra liberar.','or');
+    if(orderModalData && orderModalData.id === o.id){
+      Object.assign(orderModalData, {superfreteId: sfOrderId, superfreteStatus:'pending', superfreteService: servico.name});
+      showOrderModal();
+    } else render();
+    return;
+  }
+
+  // === 6. PAGA (/checkout) ===
+  showToast('💰 Finalizando pagamento...','or');
+  const payRes = await fetch(SUPERFRETE_PROXY, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ method:'POST', endpoint:'/checkout', body: { orders: [sfOrderId] } })
+  });
+  const payJson = await payRes.json();
+  if(!payJson.ok){
+    const err = (payJson.data && (payJson.data.message || payJson.data.error)) || JSON.stringify(payJson.data).slice(0,300);
+    console.error('[superfrete checkout]', payJson);
+    return showToast(`❌ Erro no pagamento: ${err}. Etiqueta criada mas não paga.`,'rd');
+  }
+
+  // === 7. BAIXA PDF (/tag/print) ===
+  showToast('📄 Gerando PDF da etiqueta...','or');
+  const printRes = await fetch(SUPERFRETE_PROXY, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ method:'POST', endpoint:'/tag/print', body: { orders: [sfOrderId] } })
+  });
+  const printJson = await printRes.json();
+  let printUrl = '';
+  if(printJson.ok){
+    const d = printJson.data.data || printJson.data;
+    printUrl = d.url || d.link || '';
+  }
+
+  // === 8. BUSCA RASTREIO (/order/info/{id}) ===
+  const trackRes = await fetch(SUPERFRETE_PROXY, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ method:'GET', endpoint:`/order/info/${sfOrderId}` })
+  });
+  const trackJson = await trackRes.json();
+  let tracking = '';
+  if(trackJson.ok){
+    const d = trackJson.data.data || trackJson.data;
+    tracking = d.tracking || '';
+  }
+
+  // Atualiza pedido com tudo
+  state.orders = state.orders.map(ord => ord.id === o.id ? {
+    ...ord,
+    superfreteStatus: 'released',
+    superfreteTracking: tracking,
+    superfretePrintUrl: printUrl
+  } : ord);
+  save('orders');
+  if(orderModalData && orderModalData.id === o.id){
+    Object.assign(orderModalData, {superfreteStatus:'released', superfreteTracking: tracking, superfretePrintUrl: printUrl});
+    showOrderModal();
+  } else render();
+
+  showToast(`✅ Etiqueta pronta! Rastreio: ${tracking || 'aguardando'}`,'gr');
+  if(printUrl){
+    if(confirm('Etiqueta gerada! Abrir PDF agora pra imprimir?')) window.open(printUrl, '_blank');
+  }
+}
+
+// Cancela etiqueta SuperFrete (só funciona se ainda não foi postada)
+async function cancelarEtiquetaSuperFrete(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.superfreteId) return showToast('❌ Pedido sem etiqueta SuperFrete.','rd');
+  const motivo = prompt(`Motivo do cancelamento da etiqueta?`, 'Pedido cancelado pelo cliente');
+  if(!motivo) return;
+  showToast('× Cancelando etiqueta...','or');
+  const r = await fetch(SUPERFRETE_PROXY, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      method:'POST',
+      endpoint:'/order/cancel',
+      body: { order: { id: o.superfreteId, reason: motivo } }
+    })
+  });
+  const j = await r.json();
+  if(j.ok){
+    state.orders = state.orders.map(ord => ord.id === o.id ? {
+      ...ord, superfreteStatus: 'cancelled'
+    } : ord);
+    save('orders');
+    if(orderModalData && orderModalData.id === o.id){
+      orderModalData.superfreteStatus = 'cancelled';
+      showOrderModal();
+    } else render();
+    showToast('✅ Etiqueta cancelada e saldo estornado.','gr');
+  } else {
+    const err = (j.data && (j.data.message || j.data.error)) || JSON.stringify(j.data).slice(0,200);
+    showToast(`❌ Erro ao cancelar: ${err}`,'rd');
   }
 }
 
