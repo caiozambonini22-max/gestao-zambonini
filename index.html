@@ -1763,6 +1763,10 @@ function renderOrderModal(){
             <div style="margin-top:8px">
               ${o.blingNFId?`<div style="padding:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:6px;font-size:11px;color:var(--gr);margin-bottom:6px">🧾 <strong>NF criada:</strong> #${esc(o.blingNFNumero||o.blingNFId)}${o.blingNFStatus?` · ${esc(o.blingNFStatus)}`:''}</div>`:''}
               <button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:9px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#3b82f6;font-weight:600" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF no Bling':'🧾 Emitir NF via Bling'}</button>
+              ${o.blingNFId?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
+                <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarDANFE('${o.id||''}')">📄 Baixar DANFE</button>
+                <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarXMLNF('${o.id||''}')">💾 Baixar XML</button>
+              </div>`:''}
             </div>
             <div style="margin-top:6px">
               ${o.superfreteId?`<div style="padding:8px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:6px;font-size:11px;color:#10b981;margin-bottom:6px">
@@ -5137,6 +5141,9 @@ async function syncProdToBling(){
 // ============ EMITIR NF VIA BLING ============
 // Cria NF em RASCUNHO no Bling a partir de um pedido do ERP
 // NÃO envia pra SEFAZ — você revisa no Bling e autoriza manualmente
+// ============ NF-E MODAL (visual) ============
+let _nfModalState = null;
+
 async function emitirNFPedido(orderId){
   const o = state.orders.find(x => x.id === orderId) || orderModalData;
   if(!o) return showToast('❌ Pedido não encontrado.','rd');
@@ -5146,72 +5153,184 @@ async function emitirNFPedido(orderId){
   if(!o.cpfCnpj) return showToast('❌ Cliente sem CPF/CNPJ. Preenche no pedido.','rd');
   if(!o.street || !o.cep) return showToast('❌ Endereço incompleto (rua + CEP).','rd');
 
-  // Pega lista completa de itens do pedido
   const allItems = (o.items && o.items.length) ? o.items : [{productId:o.productId, quantity:o.quantity, salePrice:o.salePrice}];
   if(!allItems.length) return showToast('❌ Pedido sem produtos.','rd');
 
-  // === FILTRO "EMITE NF" ===
-  // Um item vai pra NF se:
-  //   - O item tem incluirNaNF === true/false (override explícito), OU
-  //   - O produto tem emiteNF !== false (default = true)
-  // Brindes (isGift=true) ficam fora por padrão, mesmo que o produto emita NF.
-  const itemsNF = [];
-  const itemsFora = [];
-  for(const it of allItems){
+  // Prepara items pro modal com flag "incluir" inicial
+  const itemsModal = allItems.map((it, idx) => {
     const p = state.prods.find(x => x.id === it.productId);
-    if(!p){ itemsFora.push({nome:'(produto removido)', motivo:'produto não existe'}); continue; }
-    // Override no item
-    let inclui;
-    if(typeof it.incluirNaNF === 'boolean') inclui = it.incluirNaNF;
-    else inclui = (p.emiteNF !== false) && !it.isGift;
-    if(inclui) itemsNF.push({it, p});
-    else itemsFora.push({nome: p.name + (it.isGift?' (brinde)':''), motivo: it.isGift?'brinde':'produto não emite NF'});
-  }
+    let incluir;
+    if(typeof it.incluirNaNF === 'boolean') incluir = it.incluirNaNF;
+    else incluir = p && (p.emiteNF !== false) && !it.isGift;
+    return { ...it, _idx: idx, _p: p, incluir };
+  });
 
-  if(!itemsNF.length){
-    return showToast('❌ Nenhum item do pedido está marcado pra emitir NF.','rd');
-  }
+  _nfModalState = {
+    orderId: o.id,
+    order: o,
+    items: itemsModal,
+    enviando: false
+  };
+  renderNfModal();
+}
 
-  // Valida que os itens que vão pra NF têm blingId
-  const semBlingId = itemsNF.filter(x => !x.p.blingId).map(x => x.p.name);
-  if(semBlingId.length){
-    return showToast(`❌ Produtos sem Bling ID: ${semBlingId.join(', ')}. Sincroniza primeiro.`,'rd');
-  }
+function fecharNfModal(){
+  _nfModalState = null;
+  const ov = document.getElementById('nf-modal-overlay');
+  if(ov) ov.remove();
+}
 
-  // Valor da NF = soma dos itens marcados
-  const valorNF = itemsNF.reduce((a,{it}) => a + Number(it.salePrice||0) * Number(it.quantity||1), 0);
+function toggleNfItem(idx){
+  if(!_nfModalState) return;
+  const it = _nfModalState.items.find(x => x._idx === idx);
+  if(it) it.incluir = !it.incluir;
+  renderNfModal();
+}
+
+function renderNfModal(){
+  const s = _nfModalState;
+  if(!s) return;
+  let ov = document.getElementById('nf-modal-overlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'nf-modal-overlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '10000';
+    ov.onclick = e => { if(e.target === ov) fecharNfModal(); };
+    document.body.appendChild(ov);
+  }
+  const o = s.order;
+  const itemsNF = s.items.filter(x => x.incluir);
+  const itemsFora = s.items.filter(x => !x.incluir);
+  const valorNF = itemsNF.reduce((a,it) => a + Number(it.salePrice||0) * Number(it.quantity||1), 0);
   const totalPedido = getOrderTotal(o);
+  const semBlingId = itemsNF.filter(x => x._p && !x._p._p?.blingId && !x._p.blingId).map(x => x._p?.name).filter(Boolean);
+  const temProblema = itemsNF.length === 0 || semBlingId.length > 0;
 
-  // Mensagem de confirmação explicando o que vai/não vai
-  const foraTxt = itemsFora.length ? `\n\n❌ FORA DA NF (${itemsFora.length}):\n` + itemsFora.map(x => `  • ${x.nome} (${x.motivo})`).join('\n') : '';
-  const naTxt = `✅ VAI PRA NF (${itemsNF.length}):\n` + itemsNF.map(({it,p}) => `  • ${p.name} × ${it.quantity||1} = ${fmtBRL(Number(it.salePrice||0)*Number(it.quantity||1))}`).join('\n');
-  const diffTxt = Math.abs(valorNF - totalPedido) > 0.01 ? `\n\n⚠️ Valor NF: ${fmtBRL(valorNF)}  |  Total pedido: ${fmtBRL(totalPedido)}  (diferença fica no ERP, fora da NF)` : '';
+  const linhaItem = (it) => {
+    const p = it._p;
+    const nome = p ? p.name : '(produto removido)';
+    const subtotal = Number(it.salePrice||0) * Number(it.quantity||1);
+    const semId = p && !p.blingId;
+    const temNcm = p && p.ncm;
+    const incluir = it.incluir;
+    const brinde = it.isGift;
+    return `<div onclick="toggleNfItem(${it._idx})" style="cursor:pointer;display:grid;grid-template-columns:28px 1fr 60px 80px;gap:10px;align-items:center;padding:11px 12px;border-radius:8px;border:1px solid ${incluir?'rgba(16,185,129,.4)':'var(--bd)'};background:${incluir?'rgba(16,185,129,.05)':'var(--sf3)'};margin-bottom:6px">
+      <div style="width:22px;height:22px;border-radius:5px;border:2px solid ${incluir?'#10b981':'var(--bd)'};background:${incluir?'#10b981':'transparent'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:bold">${incluir?'✓':''}</div>
+      <div>
+        <div style="font-weight:600;font-size:13px;color:var(--tx)">${esc(nome)}${brinde?' <span style="font-size:9px;padding:2px 6px;background:rgba(249,115,22,.15);color:var(--or);border-radius:4px;margin-left:4px">🎁 BRINDE</span>':''}</div>
+        <div style="font-size:10px;color:var(--txd);margin-top:2px">
+          ${p?`SKU ${esc(p.sku||'—')} · NCM ${esc(p.ncm||'—')}`:''}
+          ${semId?` · <span style="color:var(--rd)">⚠️ Sem Bling ID</span>`:''}
+          ${!temNcm&&p?` · <span style="color:var(--rd)">⚠️ Sem NCM</span>`:''}
+        </div>
+      </div>
+      <div style="text-align:center;font-size:12px;color:var(--txd)">× ${it.quantity||1}</div>
+      <div style="text-align:right;font-weight:600;font-size:13px;color:${incluir?'var(--or)':'var(--txd)'}">${fmtBRL(subtotal)}</div>
+    </div>`;
+  };
 
-  if(!confirm(`Gerar NF em rascunho no Bling pro pedido de ${o.clientName}?\n\n${naTxt}${foraTxt}${diffTxt}\n\nValor da NF: ${fmtBRL(valorNF)}\n\nA NF será criada mas NÃO enviada pra SEFAZ — você revisa no Bling e autoriza manualmente.`)) return;
+  // Marca/desmarca todos
+  const nenhumMarcado = itemsNF.length === 0;
+  const todosMarcados = s.items.length === itemsNF.length;
 
-  showToast('🧾 Gerando NF no Bling...','or');
+  const diferenca = valorNF - totalPedido;
+  const temDiferenca = Math.abs(diferenca) > 0.01;
 
-  // A partir daqui, "items" = só os itens que vão pra NF
-  const items = itemsNF.map(x => x.it);
+  ov.innerHTML = `<div class="modal" style="width:720px;max-width:95vw;max-height:92vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="mt2" style="margin:0">🧾 Emitir NF-e — Bling</div>
+      <button onclick="fecharNfModal()" style="background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1">×</button>
+    </div>
 
-  // === MONTA PAYLOAD ===
+    <!-- Cabeçalho cliente -->
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600;margin-bottom:3px">👤 Destinatário</div>
+          <div style="font-weight:600;font-size:13px">${esc(o.clientName)}</div>
+          <div style="font-size:11px;color:var(--txd)">CPF/CNPJ: ${esc(o.cpfCnpj||'—')}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600;margin-bottom:3px">📍 Endereço</div>
+          <div style="font-size:11px">${esc(o.street||'')}, ${esc(o.streetNum||'S/N')}</div>
+          <div style="font-size:11px;color:var(--txd)">${esc(o.city||'')} / ${esc((o.state||'SP').toUpperCase())} · CEP ${esc(o.cep||'')}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lista de itens -->
+    <div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.5px;text-transform:uppercase">📦 Itens — clique pra marcar/desmarcar</div>
+        <div style="display:flex;gap:6px">
+          <button onclick="_nfModalState.items.forEach(it=>it.incluir=true);renderNfModal()" style="font-size:10px;padding:4px 8px;background:var(--sf2);border:1px solid var(--bd);border-radius:4px;color:var(--txm);cursor:pointer">✓ Todos</button>
+          <button onclick="_nfModalState.items.forEach(it=>it.incluir=false);renderNfModal()" style="font-size:10px;padding:4px 8px;background:var(--sf2);border:1px solid var(--bd);border-radius:4px;color:var(--txm);cursor:pointer">× Nenhum</button>
+        </div>
+      </div>
+      ${s.items.map(linhaItem).join('')}
+    </div>
+
+    <!-- Resumo -->
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;text-align:center">
+        <div>
+          <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600">Total do Pedido</div>
+          <div style="font-weight:700;font-size:16px;color:var(--txm);margin-top:3px">${fmtBRL(totalPedido)}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600">Itens na NF</div>
+          <div style="font-weight:700;font-size:16px;color:var(--gr);margin-top:3px">${itemsNF.length}</div>
+        </div>
+        <div>
+          <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600">Valor da NF</div>
+          <div style="font-weight:800;font-size:18px;color:var(--or);margin-top:3px">${fmtBRL(valorNF)}</div>
+        </div>
+      </div>
+      ${temDiferenca ? `<div style="margin-top:10px;padding:8px 10px;background:rgba(249,115,22,.1);border-radius:6px;font-size:11px;color:var(--or);text-align:center">⚠️ Diferença de ${fmtBRL(Math.abs(diferenca))} ficará só no ERP, fora da NF</div>`:''}
+    </div>
+
+    ${semBlingId.length ? `<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--rd)">
+      ⚠️ Produtos sem Bling ID: ${esc(semBlingId.join(', '))}. Sincroniza primeiro.
+    </div>`:''}
+
+    <!-- Rodapé -->
+    <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--bd)">
+      <button class="btn bg2" onclick="fecharNfModal()" style="flex:1">Cancelar</button>
+      <button class="btn bp" ${temProblema||s.enviando?'disabled style="opacity:.4;cursor:not-allowed"':''} onclick="confirmarEnvioNF()" style="flex:2">
+        ${s.enviando ? '⏳ Enviando...' : nenhumMarcado ? 'Marque pelo menos 1 item' : `🧾 Gerar NF em rascunho — ${fmtBRL(valorNF)}`}
+      </button>
+    </div>
+    <div style="margin-top:8px;font-size:10px;color:var(--txd);text-align:center;line-height:1.5">
+      A NF será criada em rascunho no Bling. Você revisa e autoriza manualmente lá.
+    </div>
+  </div>`;
+}
+
+async function confirmarEnvioNF(){
+  const s = _nfModalState;
+  if(!s) return;
+  const o = s.order;
+  const itemsNF = s.items.filter(x => x.incluir);
+  if(!itemsNF.length) return showToast('❌ Marque pelo menos 1 item.','rd');
+
+  s.enviando = true;
+  renderNfModal();
+
+  // Monta payload
   const soCpf = (o.cpfCnpj||'').replace(/\D/g,'');
-  const tipoDoc = soCpf.length === 14 ? 'J' : 'F'; // J=Jurídica, F=Física
+  const tipoDoc = soCpf.length === 14 ? 'J' : 'F';
   const estadoCliente = (o.state || 'SP').toUpperCase();
   const dentroDoEstado = estadoCliente === 'SP';
-  const cfopDefault = dentroDoEstado ? '5102' : '6102';
 
-  // Monta itens
-  const itensBling = items.map((it, idx) => {
-    const p = state.prods.find(x => x.id === it.productId);
-    const qtd = Number(it.quantity || 1);
-    const vUnit = Number(it.salePrice || 0);
+  const itensBling = itemsNF.map((it, idx) => {
+    const p = it._p;
     return {
       codigo: p.sku || `ITEM-${idx+1}`,
       descricao: p.name,
       unidade: p.unidMedida || 'Un',
-      quantidade: qtd,
-      valor: vUnit,
+      quantidade: Number(it.quantity || 1),
+      valor: Number(it.salePrice || 0),
       tipo: 'P',
       produto: p.blingId ? { id: Number(p.blingId) } : undefined,
       classificacaoFiscal: p.ncm || '',
@@ -5220,51 +5339,32 @@ async function emitirNFPedido(orderId){
     };
   });
 
-  // Modalidade de frete: 0=emitente(CIF), 1=destinatário(FOB), 9=sem frete
   const modFrete = (o.correiosCost || o.motoboyCost) ? '0' : '9';
-
   const payload = {
-    tipo: 1, // 1 = NFe modelo 55 (padrão). 2 = NFCe modelo 65
-    numero: 0, // 0 = Bling atribui próximo número
+    tipo: 1, numero: 0,
     dataOperacao: new Date().toISOString().slice(0,19).replace('T',' '),
     contato: {
-      nome: o.clientName,
-      tipoPessoa: tipoDoc,
-      numeroDocumento: soCpf,
-      ie: tipoDoc === 'J' ? '' : 'ISENTO',
-      rg: '',
-      email: o.email || '',
+      nome: o.clientName, tipoPessoa: tipoDoc, numeroDocumento: soCpf,
+      ie: tipoDoc === 'J' ? '' : 'ISENTO', rg: '', email: o.email || '',
       endereco: {
-        endereco: o.street || '',
-        numero: o.streetNum || 'S/N',
-        complemento: o.complement || '',
-        bairro: o.bairro || '',
-        cep: (o.cep||'').replace(/\D/g,''),
-        municipio: o.city || '',
-        uf: estadoCliente,
-        pais: 'Brasil'
+        endereco: o.street || '', numero: o.streetNum || 'S/N',
+        complemento: o.complement || '', bairro: o.bairro || '',
+        cep: (o.cep||'').replace(/\D/g,''), municipio: o.city || '',
+        uf: estadoCliente, pais: 'Brasil'
       },
       telefone: (o.phone||'').replace(/\D/g,'')
     },
-    naturezaOperacao: { id: null }, // Bling usa a padrão da conta
+    naturezaOperacao: { id: null },
     itens: itensBling,
-    transporte: {
-      fretePorConta: modFrete,
-      transportador: { nome: o.correiosCost ? 'Correios' : '' }
-    },
+    transporte: { fretePorConta: modFrete, transportador: { nome: o.correiosCost ? 'Correios' : '' } },
     observacoes: o.notes || '',
     desconto: Number(o.discount || 0) > 0 ? { valor: Number(o.discount), unidade: 'REAL' } : undefined
   };
 
   try{
     const r = await fetch(BLING_PROXY, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        method: 'POST',
-        endpoint: '/nfe',
-        body: payload
-      })
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ method: 'POST', endpoint: '/nfe', body: payload })
     });
     const j = await r.json();
     if(j.ok){
@@ -5272,35 +5372,125 @@ async function emitirNFPedido(orderId){
       const nfId = nfData.id;
       const nfNumero = nfData.numero || '';
       const nfSerie = nfData.serie || '';
-      // Salva no pedido
       state.orders = state.orders.map(ord => ord.id === o.id ? {
-        ...ord,
-        blingNFId: String(nfId),
+        ...ord, blingNFId: String(nfId),
         blingNFNumero: nfNumero ? `${nfNumero}/${nfSerie}` : String(nfId),
         blingNFStatus: 'rascunho'
       } : ord);
       save('orders');
       if(orderModalData && orderModalData.id === o.id){
-        orderModalData.blingNFId = String(nfId);
-        orderModalData.blingNFNumero = nfNumero ? `${nfNumero}/${nfSerie}` : String(nfId);
-        orderModalData.blingNFStatus = 'rascunho';
+        Object.assign(orderModalData, { blingNFId: String(nfId), blingNFNumero: nfNumero ? `${nfNumero}/${nfSerie}` : String(nfId), blingNFStatus: 'rascunho' });
         showOrderModal();
       }
-      showToast(`✅ NF criada! ID: ${nfId}. Abra o Bling pra conferir e autorizar.`,'gr');
-      // Abre o Bling pra validar + autorizar
+      fecharNfModal();
+      showToast(`✅ NF criada! ID: ${nfId}. Abra o Bling pra autorizar.`,'gr');
       setTimeout(()=>{
         if(confirm('NF criada em rascunho. Abrir o Bling agora pra conferir e autorizar?')){
           window.open(`https://www.bling.com.br/notasfiscais.php#list`,'_blank');
         }
       }, 500);
     }else{
+      s.enviando = false;
       const errMsg = (j.data && j.data.error && j.data.error.description) || JSON.stringify(j.data).slice(0,300);
       showToast(`❌ Erro ${j.status}: ${errMsg}`,'rd');
-      console.error('[bling nf]', j);
+      renderNfModal();
     }
   }catch(e){
+    s.enviando = false;
     showToast('❌ Falha de rede: ' + e.message,'rd');
-    console.error('[bling nf]', e);
+    renderNfModal();
+  }
+}
+
+// ============ BAIXAR DANFE / XML ============
+async function baixarDANFE(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF emitida.','rd');
+  showToast('📄 Buscando DANFE...','or');
+  try{
+    // Busca info da NF (precisa estar autorizada pra ter DANFE)
+    const r = await fetch(BLING_PROXY, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ method:'GET', endpoint:`/nfe/${o.blingNFId}` })
+    });
+    const j = await r.json();
+    if(!j.ok) return showToast('❌ Erro ao buscar NF: '+((j.data?.error?.description)||j.status),'rd');
+    const nf = j.data.data || j.data;
+    if(nf.situacao !== 5 && nf.situacao !== 6 && !nf.chaveAcesso){
+      return showToast('⚠️ NF ainda não foi autorizada pela SEFAZ. Autoriza no Bling primeiro.','rd');
+    }
+    // Pede o PDF do DANFE
+    const r2 = await fetch(BLING_PROXY, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ method:'POST', endpoint:'/nfe/pdfs', body: { idsNotas: [Number(o.blingNFId)] } })
+    });
+    const j2 = await r2.json();
+    if(!j2.ok) return showToast('❌ Erro ao gerar DANFE: '+((j2.data?.error?.description)||j2.status),'rd');
+    const data = j2.data.data || j2.data;
+    const pdfUrl = data.pdf || data.url || (data.danfe && data.danfe.url);
+    if(pdfUrl){
+      window.open(pdfUrl, '_blank');
+      showToast('✅ DANFE aberto em nova aba.','gr');
+    } else {
+      showToast('⚠️ DANFE gerado mas sem URL retornada.','or');
+      console.log('[danfe]', data);
+    }
+  }catch(e){
+    showToast('❌ Erro: '+e.message,'rd');
+  }
+}
+
+async function baixarXMLNF(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF emitida.','rd');
+  showToast('💾 Buscando XML...','or');
+  try{
+    const r = await fetch(BLING_PROXY, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ method:'GET', endpoint:`/nfe/${o.blingNFId}` })
+    });
+    const j = await r.json();
+    if(!j.ok) return showToast('❌ Erro ao buscar NF: '+((j.data?.error?.description)||j.status),'rd');
+    const nf = j.data.data || j.data;
+    // Tenta pegar o XML direto
+    const xmlRaw = nf.xml || (nf.arquivo && nf.arquivo.xml);
+    if(xmlRaw){
+      // Decode base64 se vier codificado
+      let xmlContent = xmlRaw;
+      try{ if(/^[A-Za-z0-9+/=]+$/.test(xmlRaw) && xmlRaw.length > 100) xmlContent = atob(xmlRaw); }catch{}
+      // Baixa como arquivo
+      const nomeArquivo = `NF_${(nf.numero||o.blingNFId)}_${(o.clientName||'cliente').replace(/[^a-zA-Z0-9]/g,'_').slice(0,30)}_${(new Date()).toISOString().slice(0,10)}.xml`;
+      const blob = new Blob([xmlContent], { type: 'application/xml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = nomeArquivo;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      showToast(`✅ XML baixado: ${nomeArquivo}`,'gr');
+    } else {
+      // Fallback: tenta endpoint de XML separado
+      const r2 = await fetch(BLING_PROXY, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ method:'GET', endpoint:`/nfe/${o.blingNFId}/xml` })
+      });
+      const j2 = await r2.json();
+      if(j2.ok){
+        const d = j2.data.data || j2.data;
+        const xmlRaw2 = d.xml || d.content || JSON.stringify(d);
+        const nomeArquivo = `NF_${o.blingNFId}_${(o.clientName||'cliente').replace(/[^a-zA-Z0-9]/g,'_').slice(0,30)}.xml`;
+        const blob = new Blob([xmlRaw2], { type: 'application/xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = nomeArquivo;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        showToast(`✅ XML baixado: ${nomeArquivo}`,'gr');
+      } else {
+        showToast('⚠️ NF sem XML disponível. Precisa estar autorizada pela SEFAZ.','or');
+      }
+    }
+  }catch(e){
+    showToast('❌ Erro: '+e.message,'rd');
   }
 }
 
