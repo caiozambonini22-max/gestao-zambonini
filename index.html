@@ -1761,11 +1761,15 @@ function renderOrderModal(){
               <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="gerarComprovanteImagem('${o.id||''}')">🖼️ Comprovante Img</button>
             </div>
             <div style="margin-top:8px">
-              ${o.blingNFId?`<div style="padding:8px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:6px;font-size:11px;color:var(--gr);margin-bottom:6px">🧾 <strong>NF criada:</strong> #${esc(o.blingNFNumero||o.blingNFId)}${o.blingNFStatus?` · ${esc(o.blingNFStatus)}`:''}</div>`:''}
-              <button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:9px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#3b82f6;font-weight:600" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF no Bling':'🧾 Emitir NF via Bling'}</button>
+              ${o.blingNFId?`<div style="padding:8px;background:${o.blingNFStatus==='autorizada'?'rgba(16,185,129,.1)':'rgba(34,197,94,.1)'};border:1px solid ${o.blingNFStatus==='autorizada'?'rgba(16,185,129,.3)':'rgba(34,197,94,.3)'};border-radius:6px;font-size:11px;color:${o.blingNFStatus==='autorizada'?'#10b981':'var(--gr)'};margin-bottom:6px">
+                🧾 <strong>NF ${esc(o.blingNFStatus||'rascunho')}:</strong> #${esc(o.blingNFNumero||o.blingNFId)}
+                ${o.blingNFKey?`<div style="font-size:9px;font-family:monospace;color:var(--txd);margin-top:3px;word-break:break-all">${esc(o.blingNFKey)}</div>`:''}
+              </div>`:''}
+              <button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:9px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#3b82f6;font-weight:600" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF':'🧾 Emitir NF via Bling'}</button>
               ${o.blingNFId?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
-                <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarDANFE('${o.id||''}')">📄 Baixar DANFE</button>
-                <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarXMLNF('${o.id||''}')">💾 Baixar XML</button>
+                <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="visualizarNF('${o.id||''}')">👁️ Ver NF</button>
+                ${o.blingNFStatus!=='autorizada'?`<button class="btn" style="justify-content:center;font-size:11px;padding:7px 6px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.4);color:#10b981;font-weight:600" onclick="autorizarNF('${o.id||''}')">✅ Autorizar SEFAZ</button>`:`<button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarDANFE('${o.id||''}')">📄 DANFE</button>`}
+                ${o.blingNFStatus==='autorizada'?`<button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarXMLNF('${o.id||''}')">💾 XML</button>`:''}
               </div>`:''}
             </div>
             <div style="margin-top:6px">
@@ -2333,7 +2337,7 @@ function renderNotas(){
     const st=nfInfo(nf.status);const order=state.orders.find(o=>o.id===nf.orderId);
     rows+=`<tr class="cr" onclick="openNFModal('${nf.id}')"><td><span style="font-size:13px;font-weight:700;color:var(--bl)">${esc(nf.numero)}</span></td><td style="color:var(--txd);font-size:11px">${nf.serie}</td><td style="color:var(--txd);font-size:11px">${nf.dataEmissao}</td><td style="font-weight:500">${esc(nf.clientName||'—')}</td><td>${order?`<span class="onum">#${order.orderNum}</span>`:'—'}</td><td style="font-weight:600;color:var(--or)">${fmtBRL(nf.valor)}</td><td><span class="badge" style="background:${st.c}22;color:${st.c}">${st.label}</span></td><td onclick="event.stopPropagation()"><button class="btn bd2 sm" onclick="deleteNF('${nf.id}')">×</button></td></tr>`;
   });}
-  return `<div class="sbar">${statusBtns}</div><div class="fbar"><input placeholder="Buscar..." value="${esc(nfSearch)}" oninput="nfSearch=this.value;render()" style="flex:1;max-width:280px"><button class="btn bp" style="margin-left:auto" onclick="openNFModal(null)">+ Nova NF</button></div><div class="card" style="padding:0;overflow:hidden"><div class="tw"><table><thead><tr><th>N. NF</th><th>Serie</th><th>Emissao</th><th>Cliente</th><th>Pedido</th><th>Valor</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>${filtered.length>0?`<div class="tfoot"><span><span class="tfl">Emitidas: </span><strong>${filtered.filter(n=>n.status==='emitida').length}</strong></span><span><span class="tfl">Total: </span><span class="tfv">${fmtBRL(totFat)}</span></span></div>`:''}</div>`;
+  return `<div class="sbar">${statusBtns}</div><div class="fbar"><input placeholder="Buscar..." value="${esc(nfSearch)}" oninput="nfSearch=this.value;render()" style="flex:1;max-width:280px"><button class="btn bg2" style="margin-left:auto" onclick="sincronizarNFsBling()">📥 Puxar do Bling</button><button class="btn bp" onclick="openNFModal(null)">+ Nova NF</button></div><div class="card" style="padding:0;overflow:hidden"><div class="tw"><table><thead><tr><th>N. NF</th><th>Serie</th><th>Emissao</th><th>Cliente</th><th>Pedido</th><th>Valor</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>${filtered.length>0?`<div class="tfoot"><span><span class="tfl">Emitidas: </span><strong>${filtered.filter(n=>n.status==='emitida').length}</strong></span><span><span class="tfl">Total: </span><span class="tfv">${fmtBRL(totFat)}</span></span></div>`:''}</div>`;
 }
 function deleteNF(id){if(confirm('Remover?')){state.nfs=state.nfs.filter(n=>n.id!==id);save('nfs');render();}}
 function openNFModal(id){
@@ -5169,7 +5173,10 @@ async function emitirNFPedido(orderId){
     orderId: o.id,
     order: o,
     items: itemsModal,
-    enviando: false
+    enviando: false,
+    // Série/número configuráveis
+    serie: (state.config && state.config.blingNFSerie) || 2,
+    numero: '' // vazio = Bling atribui automático
   };
   renderNfModal();
 }
@@ -5294,6 +5301,17 @@ function renderNfModal(){
       ⚠️ Produtos sem Bling ID: ${esc(semBlingId.join(', '))}. Sincroniza primeiro.
     </div>`:''}
 
+    <!-- Série e Número -->
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
+      <div style="font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">🔢 Numeração da NF</div>
+      <div style="display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:end">
+        <div class="field"><label style="font-size:10px">Série</label><input type="number" min="1" max="999" value="${s.serie}" oninput="_nfModalState.serie=Number(this.value)||1;renderNfModal()"></div>
+        <div class="field"><label style="font-size:10px">Número (opcional)</label><input type="number" min="0" value="${s.numero}" oninput="_nfModalState.numero=this.value" placeholder="vazio = Bling escolhe o próximo"></div>
+        <button onclick="salvarSerieDefault()" style="padding:7px 12px;background:var(--sf2);border:1px solid var(--bd);border-radius:6px;color:var(--txm);font-size:11px;cursor:pointer;height:34px" title="Salva esta série como padrão pra próximas NFs">💾 Padrão</button>
+      </div>
+      <div style="font-size:10px;color:var(--txd);margin-top:6px">💡 Use série <strong>2+</strong> pra não conflitar com NFs antigas do Tiny (série 1).</div>
+    </div>
+
     <!-- Rodapé -->
     <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--bd)">
       <button class="btn bg2" onclick="fecharNfModal()" style="flex:1">Cancelar</button>
@@ -5341,7 +5359,9 @@ async function confirmarEnvioNF(){
 
   const modFrete = (o.correiosCost || o.motoboyCost) ? '0' : '9';
   const payload = {
-    tipo: 1, numero: 0,
+    tipo: 1,
+    numero: s.numero ? Number(s.numero) : 0,
+    serie: Number(s.serie) || 2,
     dataOperacao: new Date().toISOString().slice(0,19).replace('T',' '),
     contato: {
       nome: o.clientName, tipoPessoa: tipoDoc, numeroDocumento: soCpf,
@@ -5403,38 +5423,139 @@ async function confirmarEnvioNF(){
 }
 
 // ============ BAIXAR DANFE / XML ============
-async function baixarDANFE(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
-  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF emitida.','rd');
-  showToast('📄 Buscando DANFE...','or');
+// Sincroniza NFs do Bling pra aba Notas Fiscais do ERP
+async function sincronizarNFsBling(){
+  showToast('📥 Puxando NFs do Bling...','or');
   try{
-    // Busca info da NF (precisa estar autorizada pra ter DANFE)
     const r = await fetch(BLING_PROXY, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ method:'GET', endpoint:`/nfe/${o.blingNFId}` })
+      body: JSON.stringify({ method:'GET', endpoint:'/nfe?pagina=1&limite=100' })
     });
     const j = await r.json();
-    if(!j.ok) return showToast('❌ Erro ao buscar NF: '+((j.data?.error?.description)||j.status),'rd');
-    const nf = j.data.data || j.data;
-    if(nf.situacao !== 5 && nf.situacao !== 6 && !nf.chaveAcesso){
-      return showToast('⚠️ NF ainda não foi autorizada pela SEFAZ. Autoriza no Bling primeiro.','rd');
+    if(!j.ok){
+      const err = (j.data?.error?.description) || JSON.stringify(j.data).slice(0,200);
+      return showToast(`❌ Erro: ${err}`,'rd');
     }
-    // Pede o PDF do DANFE
-    const r2 = await fetch(BLING_PROXY, {
+    const nfsBling = (j.data.data || j.data || []).filter(n => n && n.id);
+    if(!nfsBling.length) return showToast('ℹ️ Nenhuma NF encontrada no Bling.','or');
+
+    const statusMap = {1:'pendente', 2:'emitida', 3:'cancelada', 4:'enviada', 5:'emitida', 6:'emitida', 7:'cancelada', 8:'cancelada'};
+    let novas = 0, atualizadas = 0;
+    for(const nf of nfsBling){
+      const idStr = String(nf.id);
+      const existing = state.nfs.find(x => x.blingId === idStr || x.id === idStr);
+      // Monta NF no formato do ERP
+      const nfErp = {
+        id: existing ? existing.id : ('bl_' + idStr),
+        blingId: idStr,
+        numero: String(nf.numero || ''),
+        serie: String(nf.serie || '1'),
+        chave: nf.chaveAcesso || nf.chave_acesso || '',
+        dataEmissao: (nf.dataOperacao || nf.dataEmissao || '').slice(0, 10),
+        clientName: (nf.contato && nf.contato.nome) || '',
+        cpfCnpj: (nf.contato && nf.contato.numeroDocumento) || '',
+        orderId: existing ? existing.orderId : '',
+        valor: Number(nf.totalProdutos || nf.total || 0),
+        status: statusMap[nf.situacao] || 'pendente',
+        natureza: 'Venda de Mercadoria',
+        createdAt: existing ? existing.createdAt : new Date().toISOString()
+      };
+      if(existing){
+        state.nfs = state.nfs.map(x => (x.blingId === idStr || x.id === idStr) ? nfErp : x);
+        atualizadas++;
+      } else {
+        state.nfs = [nfErp, ...state.nfs];
+        novas++;
+      }
+    }
+    save('nfs');
+    render();
+    showToast(`✅ ${novas} novas, ${atualizadas} atualizadas.`,'gr');
+  }catch(e){
+    showToast('❌ Erro: ' + e.message, 'rd');
+  }
+}
+
+// Salva série escolhida como padrão em state.config
+function salvarSerieDefault(){
+  if(!_nfModalState) return;
+  state.config = state.config || {};
+  state.config.blingNFSerie = Number(_nfModalState.serie) || 2;
+  save('config');
+  showToast(`✅ Série ${state.config.blingNFSerie} salva como padrão.`,'gr');
+}
+
+// Busca info completa da NF no Bling
+async function fetchBlingNF(nfId){
+  const r = await fetch(BLING_PROXY, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ method:'GET', endpoint:`/nfe/${nfId}` })
+  });
+  const j = await r.json();
+  if(!j.ok) throw new Error((j.data?.error?.description) || `erro ${j.status}`);
+  return j.data.data || j.data;
+}
+
+// Autoriza NF via SEFAZ (POST /nfe/{id}/enviar)
+async function autorizarNF(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
+  if(!confirm(`Enviar NF #${o.blingNFNumero||o.blingNFId} pra SEFAZ e autorizar?\n\nESSA AÇÃO NÃO PODE SER DESFEITA.\nSe tiver erro fiscal, a NF é rejeitada mas o número continua queimado.`)) return;
+  showToast('🏛️ Enviando pra SEFAZ...','or');
+  try{
+    const r = await fetch(BLING_PROXY, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ method:'POST', endpoint:'/nfe/pdfs', body: { idsNotas: [Number(o.blingNFId)] } })
+      body: JSON.stringify({ method:'POST', endpoint:`/nfe/${o.blingNFId}/enviar`, body: {} })
     });
-    const j2 = await r2.json();
-    if(!j2.ok) return showToast('❌ Erro ao gerar DANFE: '+((j2.data?.error?.description)||j2.status),'rd');
-    const data = j2.data.data || j2.data;
-    const pdfUrl = data.pdf || data.url || (data.danfe && data.danfe.url);
+    const j = await r.json();
+    if(j.ok){
+      // Busca a NF atualizada pra pegar chave de acesso
+      try{
+        const nf = await fetchBlingNF(o.blingNFId);
+        const chave = nf.chaveAcesso || nf.chave_acesso || '';
+        const situacao = nf.situacao;
+        state.orders = state.orders.map(ord => ord.id === o.id ? {
+          ...ord, blingNFStatus: 'autorizada', blingNFKey: chave, blingNFSituacao: situacao
+        } : ord);
+        save('orders');
+        if(orderModalData && orderModalData.id === o.id){
+          Object.assign(orderModalData, { blingNFStatus:'autorizada', blingNFKey: chave, blingNFSituacao: situacao });
+          showOrderModal();
+        } else render();
+        showToast(`✅ NF autorizada! Chave: ${chave.slice(0,20)}...`,'gr');
+      }catch(e){
+        showToast('✅ NF enviada. (Consulte o Bling pra confirmar autorização)','gr');
+      }
+    } else {
+      const err = (j.data?.error?.description) || JSON.stringify(j.data).slice(0,400);
+      showToast(`❌ SEFAZ rejeitou: ${err}`,'rd');
+      console.error('[nfe autorizar]', j);
+    }
+  }catch(e){
+    showToast('❌ Erro: ' + e.message, 'rd');
+  }
+}
+
+// Baixa DANFE (PDF) — usa GET /nfe/{id} que já retorna link
+async function baixarDANFE(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
+  showToast('📄 Buscando DANFE...','or');
+  try{
+    const nf = await fetchBlingNF(o.blingNFId);
+    // A API v3 retorna linkDanfe quando autorizada
+    const pdfUrl = nf.linkDanfe || nf.link_danfe || nf.linkPdfNfe || nf.linkPdf || nf.pdf?.url || nf.pdf;
     if(pdfUrl){
       window.open(pdfUrl, '_blank');
-      showToast('✅ DANFE aberto em nova aba.','gr');
-    } else {
-      showToast('⚠️ DANFE gerado mas sem URL retornada.','or');
-      console.log('[danfe]', data);
+      showToast('✅ DANFE aberto.','gr');
+      return;
     }
+    // Verifica se tá autorizada (situacao 5 ou 6 = autorizada/em-contingencia)
+    if(nf.situacao !== 5 && nf.situacao !== 6 && !nf.chaveAcesso){
+      return showToast(`⚠️ NF ainda em rascunho. Clica em "Autorizar NF" primeiro.`,'or');
+    }
+    showToast('⚠️ NF autorizada mas o Bling não retornou link de PDF. Abrindo Bling.','or');
+    window.open(`https://www.bling.com.br/notasfiscais.detalhar.php?id=${o.blingNFId}`,'_blank');
   }catch(e){
     showToast('❌ Erro: '+e.message,'rd');
   }
@@ -5442,56 +5563,126 @@ async function baixarDANFE(orderId){
 
 async function baixarXMLNF(orderId){
   const o = state.orders.find(x => x.id === orderId) || orderModalData;
-  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF emitida.','rd');
+  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
   showToast('💾 Buscando XML...','or');
   try{
-    const r = await fetch(BLING_PROXY, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ method:'GET', endpoint:`/nfe/${o.blingNFId}` })
-    });
-    const j = await r.json();
-    if(!j.ok) return showToast('❌ Erro ao buscar NF: '+((j.data?.error?.description)||j.status),'rd');
-    const nf = j.data.data || j.data;
-    // Tenta pegar o XML direto
-    const xmlRaw = nf.xml || (nf.arquivo && nf.arquivo.xml);
+    const nf = await fetchBlingNF(o.blingNFId);
+    // Procura o XML em várias chaves possíveis
+    const xmlUrl = nf.linkXmlNfe || nf.linkXml || nf.link_xml || nf.xml?.url;
+    const xmlRaw = (typeof nf.xml === 'string') ? nf.xml : (nf.arquivo?.xml);
+    const nomeArquivo = `NF_${(nf.numero||o.blingNFId)}_${(o.clientName||'cliente').replace(/[^a-zA-Z0-9]/g,'_').slice(0,30)}_${(new Date()).toISOString().slice(0,10)}.xml`;
+
+    if(xmlUrl){
+      // Baixa pelo link
+      const resp = await fetch(xmlUrl);
+      const text = await resp.text();
+      const blob = new Blob([text], { type: 'application/xml' });
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = u; a.download = nomeArquivo;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
+      showToast(`✅ XML baixado: ${nomeArquivo}`,'gr');
+      return;
+    }
     if(xmlRaw){
-      // Decode base64 se vier codificado
       let xmlContent = xmlRaw;
       try{ if(/^[A-Za-z0-9+/=]+$/.test(xmlRaw) && xmlRaw.length > 100) xmlContent = atob(xmlRaw); }catch{}
-      // Baixa como arquivo
-      const nomeArquivo = `NF_${(nf.numero||o.blingNFId)}_${(o.clientName||'cliente').replace(/[^a-zA-Z0-9]/g,'_').slice(0,30)}_${(new Date()).toISOString().slice(0,10)}.xml`;
       const blob = new Blob([xmlContent], { type: 'application/xml' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = nomeArquivo;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = u; a.download = nomeArquivo;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
       showToast(`✅ XML baixado: ${nomeArquivo}`,'gr');
-    } else {
-      // Fallback: tenta endpoint de XML separado
-      const r2 = await fetch(BLING_PROXY, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ method:'GET', endpoint:`/nfe/${o.blingNFId}/xml` })
-      });
-      const j2 = await r2.json();
-      if(j2.ok){
-        const d = j2.data.data || j2.data;
-        const xmlRaw2 = d.xml || d.content || JSON.stringify(d);
-        const nomeArquivo = `NF_${o.blingNFId}_${(o.clientName||'cliente').replace(/[^a-zA-Z0-9]/g,'_').slice(0,30)}.xml`;
-        const blob = new Blob([xmlRaw2], { type: 'application/xml' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = nomeArquivo;
-        document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-        showToast(`✅ XML baixado: ${nomeArquivo}`,'gr');
-      } else {
-        showToast('⚠️ NF sem XML disponível. Precisa estar autorizada pela SEFAZ.','or');
-      }
+      return;
     }
+    if(nf.situacao !== 5 && nf.situacao !== 6){
+      return showToast('⚠️ NF ainda não autorizada. XML só é gerado após autorização SEFAZ.','or');
+    }
+    showToast('⚠️ XML não disponível. Baixa pelo Bling.','or');
+    window.open(`https://www.bling.com.br/notasfiscais.detalhar.php?id=${o.blingNFId}`,'_blank');
   }catch(e){
     showToast('❌ Erro: '+e.message,'rd');
   }
+}
+
+// Visualiza NF no modal do ERP (dados vindos do Bling)
+async function visualizarNF(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
+  showToast('👁️ Carregando NF...','or');
+  try{
+    const nf = await fetchBlingNF(o.blingNFId);
+    renderNfViewerModal(nf, o);
+  }catch(e){
+    showToast('❌ Erro: ' + e.message, 'rd');
+  }
+}
+
+function renderNfViewerModal(nf, o){
+  let ov = document.getElementById('nf-viewer-overlay');
+  if(ov) ov.remove();
+  ov = document.createElement('div');
+  ov.id = 'nf-viewer-overlay';
+  ov.className = 'overlay';
+  ov.style.zIndex = '10001';
+  ov.onclick = e => { if(e.target === ov) ov.remove(); };
+  document.body.appendChild(ov);
+
+  const situacaoMap = {1:'Pendente', 2:'Emitida', 3:'Cancelada', 4:'Enviada', 5:'Autorizada', 6:'Em contingência', 7:'Rejeitada', 8:'Denegada'};
+  const situacao = situacaoMap[nf.situacao] || `Situação ${nf.situacao||'?'}`;
+  const situacaoColor = nf.situacao === 5 ? 'var(--gr)' : nf.situacao === 7 || nf.situacao === 3 ? 'var(--rd)' : 'var(--or)';
+  const itens = nf.itens || [];
+  const contato = nf.contato || {};
+  const endereco = contato.endereco || {};
+  const chave = nf.chaveAcesso || nf.chave_acesso || '';
+
+  ov.innerHTML = `<div class="modal" style="width:820px;max-width:95vw;max-height:92vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="mt2" style="margin:0">🧾 NF-e ${esc(nf.numero||'')}${nf.serie?`/${esc(nf.serie)}`:''}</div>
+      <button onclick="document.getElementById('nf-viewer-overlay').remove()" style="background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1">×</button>
+    </div>
+
+    <!-- Status -->
+    <div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:12px;border:1px solid var(--bd)">
+      <div style="padding:6px 14px;background:${situacaoColor};color:#fff;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.5px">${esc(situacao.toUpperCase())}</div>
+      <div style="flex:1;font-size:11px;color:var(--txd)">${nf.dataOperacao?'Emitida '+esc(nf.dataOperacao):''}</div>
+      <div style="font-weight:800;font-size:18px;color:var(--or)">${fmtBRL(Number(nf.totalProdutos||nf.total||0))}</div>
+    </div>
+
+    ${chave ? `<div style="padding:10px 12px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:7px;margin-bottom:12px;font-size:11px">
+      <div style="font-size:9px;color:var(--gr);letter-spacing:1px;text-transform:uppercase;font-weight:700;margin-bottom:3px">Chave de Acesso</div>
+      <div style="font-family:monospace;font-size:11px;color:var(--tx);word-break:break-all">${esc(chave)}</div>
+    </div>`:''}
+
+    <!-- Destinatário -->
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:12px;border:1px solid var(--bd)">
+      <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:700;margin-bottom:6px">👤 Destinatário</div>
+      <div style="font-weight:600;font-size:13px">${esc(contato.nome||o.clientName||'')}</div>
+      <div style="font-size:11px;color:var(--txd)">${esc(contato.numeroDocumento||o.cpfCnpj||'')}</div>
+      <div style="font-size:11px;color:var(--txd);margin-top:4px">${esc(endereco.endereco||'')}, ${esc(endereco.numero||'')} · ${esc(endereco.bairro||'')} · ${esc(endereco.municipio||'')}/${esc(endereco.uf||'')}</div>
+    </div>
+
+    <!-- Itens -->
+    <div style="margin-bottom:12px">
+      <div style="font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:700;margin-bottom:6px">📦 Itens (${itens.length})</div>
+      <div style="border:1px solid var(--bd);border-radius:7px;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="background:var(--sf3)"><th style="text-align:left;padding:8px 10px;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--txd)">Produto</th><th style="padding:8px 10px;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--txd)">NCM</th><th style="padding:8px 10px;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--txd);text-align:center">Qtd</th><th style="padding:8px 10px;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--txd);text-align:right">Valor</th></tr>
+          </thead>
+          <tbody>
+            ${itens.map(it=>`<tr style="border-top:1px solid var(--bd)"><td style="padding:8px 10px">${esc(it.descricao||'')}</td><td style="padding:8px 10px;font-family:monospace;font-size:11px;color:var(--txd)">${esc(it.classificacaoFiscal||it.ncm||'')}</td><td style="padding:8px 10px;text-align:center">${esc(String(it.quantidade||1))}</td><td style="padding:8px 10px;text-align:right;font-weight:600">${fmtBRL(Number(it.valor||0)*Number(it.quantidade||1))}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Ações -->
+    <div style="display:grid;grid-template-columns:${nf.situacao===5?'1fr 1fr 1fr':'1fr 1fr'};gap:8px;padding-top:12px;border-top:1px solid var(--bd)">
+      ${nf.situacao !== 5 && nf.situacao !== 3 ? `<button class="btn bp" onclick="document.getElementById('nf-viewer-overlay').remove();autorizarNF('${esc(o.id)}')">✅ Autorizar na SEFAZ</button>`:''}
+      ${nf.situacao === 5 ? `<button class="btn bg2" onclick="baixarDANFE('${esc(o.id)}')">📄 Baixar DANFE</button>`:''}
+      ${nf.situacao === 5 ? `<button class="btn bg2" onclick="baixarXMLNF('${esc(o.id)}')">💾 Baixar XML</button>`:''}
+      <button class="btn bg2" onclick="document.getElementById('nf-viewer-overlay').remove()">Fechar</button>
+    </div>
+  </div>`;
 }
 
 // ============ INTEGRAÇÃO SUPERFRETE ============
@@ -5554,7 +5745,8 @@ async function gerarEtiquetaSuperFrete(orderId){
     carregando: true,
     servicoSelecionado: null,
     usarNF: !!(o.blingNFKey || o.blingNFNumero || o.blingNFId),
-    temChaveNF: !!o.blingNFKey
+    temChaveNF: !!o.blingNFKey,
+    chaveManual: o.blingNFKey || '' // Permite digitar/editar
   };
 
   renderSfModal();
@@ -5724,14 +5916,18 @@ function renderSfModal(){
     </div>
 
     <!-- Opções -->
-    <div style="padding:10px 12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
       <div style="font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">📋 Documento fiscal</div>
-      ${s.usarNF && s.temChaveNF
-        ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gr)"><span style="font-size:14px">✅</span> Vai anexar <strong>Nota Fiscal</strong> (chave do pedido no Bling)</div>`
-        : s.usarNF && !s.temChaveNF
-          ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--or)"><span style="font-size:14px">⚠️</span> NF criada no Bling mas sem chave de acesso salva — vai usar <strong>Declaração de Conteúdo</strong></div>`
-          : `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txm)"><span style="font-size:14px">📝</span> Vai usar <strong>Declaração de Conteúdo</strong> (pedido sem NF)</div>`
-      }
+      <div style="margin-bottom:8px">
+        ${s.chaveManual && s.chaveManual.length === 44
+          ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gr)"><span style="font-size:14px">✅</span> Vai anexar <strong>Nota Fiscal</strong> (chave abaixo)</div>`
+          : `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txm)"><span style="font-size:14px">📝</span> Sem chave — vai usar <strong>Declaração de Conteúdo</strong></div>`
+        }
+      </div>
+      <div class="field" style="margin:0"><label style="font-size:10px">Chave de Acesso da NF-e (44 dígitos) — opcional</label>
+        <input value="${esc(s.chaveManual||'')}" oninput="_sfModalState.chaveManual=this.value.replace(/\\D/g,'');renderSfModal()" placeholder="Cola aqui a chave se tiver NF autorizada" maxlength="44" style="font-family:monospace;font-size:11px">
+      </div>
+      ${s.chaveManual && s.chaveManual.length > 0 && s.chaveManual.length < 44 ? `<div style="font-size:10px;color:var(--or);margin-top:4px">⚠️ Chave tem ${s.chaveManual.length}/44 dígitos</div>`:''}
     </div>
 
     <!-- Serviços -->
@@ -5762,10 +5958,13 @@ async function confirmarEnvioSuperFrete(){
   const addr = s.addr;
   const cepDestino = s.cepDestino;
 
-  // Define invoice (NF) ou declaração
+  // Define invoice (NF) ou declaração — usa chave manual se tiver
   let invoiceData = null;
-  if(s.usarNF && s.temChaveNF){
-    invoiceData = { key: o.blingNFKey };
+  if(s.chaveManual && s.chaveManual.length === 44){
+    invoiceData = { key: s.chaveManual };
+    // Salva no pedido pra próximas vezes
+    state.orders = state.orders.map(ord => ord.id === o.id ? { ...ord, blingNFKey: s.chaveManual } : ord);
+    save('orders');
   }
 
   // Fecha modal
