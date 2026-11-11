@@ -6,7 +6,7 @@
 //   NFE_API_TOKEN = token do .env da VPS
 //   NFE_ERP_KEY   = chave que o ERP manda no header x-nfe-key (ou ?key= no navegador)
 //
-// O repositório é público: NENHUM segredo fica aqui, só nas variáveis da Vercel.
+// O repositório é público: NENHUM segredo fica aqui, só nas variáveis da Vercel. Ativado em 11/11/2026.
 
 export const config = { runtime: 'edge' };
 
