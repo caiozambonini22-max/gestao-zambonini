@@ -5742,7 +5742,7 @@ async function gerarEtiquetaSuperFrete(orderId){
   const nf = sfChaveNFdoPedido(o);
   _sfModalState = {
     orderId: o.id, order: o,
-    etapa: 'editar', // editar | revisar | criada | pronta
+    etapa: 'frete', // frete | dados | revisar | criada | pronta
     dest: {
       nome: o.clientName || '', doc: (o.cpfCnpj || '').replace(/\D/g,''), fone: (o.phone || '').replace(/\D/g,''), email: o.email || '',
       cep: ((usaEntrega ? o.deliveryCep : o.cep) || '').replace(/\D/g,''),
@@ -5752,7 +5752,7 @@ async function gerarEtiquetaSuperFrete(orderId){
     },
     pacote: { ...SF_PADRAO },
     conteudo: conteudo.length ? conteudo : [{ nome: 'Smartwatch', qtd: 1, valor: 0.01 }],
-    docTipo: nf ? 'chave' : 'declaracao', // declaracao | chave | xml
+    comNF: !!nf, docTipo: nf ? 'chave' : 'declaracao', // declaracao | chave | xml
     chave: nf ? nf.key : '', nfNumero: nf ? nf.number : '', xmlNome: '',
     danfeJunto: !!(o.nfeStatus === 'autorizada' && o.nfeAmbiente === 'producao'),
     seguro: false,
@@ -5776,7 +5776,7 @@ function fecharSfModal(){
 function sfSet(grupo, campo, val){
   const s = _sfModalState; if(!s) return;
   if(grupo === 'dest') s.dest[campo] = val;
-  else if(grupo === 'pacote') { s.pacote[campo] = Number(String(val).replace(',','.')) || 0; s.fretes = []; s.servicoSelecionado = null; }
+  else if(grupo === 'pacote') { s.pacote[campo] = Number(String(val).replace(',','.')) || 0; }
   else s[campo] = val;
 }
 function sfSetConteudo(i, campo, val){
@@ -5795,7 +5795,7 @@ function sfAddConteudo(){ _sfModalState.conteudo.push({ nome: '', qtd: 1, valor:
 function sfDelConteudo(i){ _sfModalState.conteudo.splice(i, 1); if(!_sfModalState.conteudo.length) sfAddConteudo(); else renderSfModal(); }
 function sfModoTroca(){
   _sfModalState.conteudo = [{ nome: 'Smartwatch', qtd: 1, valor: 0.01 }];
-  _sfModalState.docTipo = 'declaracao';
+  _sfModalState.docTipo = 'declaracao'; _sfModalState.comNF = false;
   renderSfModal();
 }
 function sfPacote(preset){
@@ -5857,21 +5857,117 @@ async function calcularFretesSF(){
 function selSfServico(id){ _sfModalState.servicoSelecionado = id; renderSfModal(); }
 
 // ---------- Validação ----------
-function sfValidar(){
-  const s = _sfModalState, d = s.dest, e = [];
-  if(!d.nome.trim()) e.push('nome do destinatário');
-  const doc = d.doc.replace(/\D/g,''); if(doc.length !== 11 && doc.length !== 14) e.push('CPF/CNPJ (11 ou 14 dígitos)');
+function sfValidarDados(){
+  const d = _sfModalState.dest, e = [];
+  if(!d.nome.trim()) e.push('nome');
+  const doc = d.doc.replace(/\D/g,''); if(doc.length !== 11 && doc.length !== 14) e.push('CPF/CNPJ');
   if(d.cep.replace(/\D/g,'').length !== 8) e.push('CEP');
   if(!d.rua.trim()) e.push('rua');
   if(!d.bairro.trim()) e.push('bairro');
   if(!d.cidade.trim() || d.uf.trim().length !== 2) e.push('cidade/UF');
-  if(!s.conteudo.length || s.conteudo.some(c => !String(c.nome).trim() || c.qtd <= 0 || c.valor < 0.01)) e.push('conteúdo (nome, qtd ≥ 1, valor ≥ R$ 0,01)');
-  if((s.docTipo === 'chave' || s.docTipo === 'xml') && String(s.chave).replace(/\D/g,'').length !== 44) e.push('chave da NF (44 dígitos)');
-  if(!s.servicoSelecionado) e.push('escolher o frete');
   return e;
 }
+function sfValidarConteudo(){
+  const s = _sfModalState, e = [];
+  if(!s.conteudo.length) e.push('adicione pelo menos 1 item');
+  s.conteudo.forEach((c, i) => {
+    if(!String(c.nome).trim()) e.push(`item ${i+1}: descrição`);
+    if(!(Number(c.qtd) >= 1)) e.push(`item ${i+1}: quantidade`);
+    if(!(Number(c.valor) >= 0.01)) e.push(`item ${i+1}: valor mínimo R$ 0,01`);
+  });
+  if(s.comNF && String(s.chave).replace(/\D/g,'').length !== 44) e.push('chave da nota fiscal (44 dígitos)');
+  return e;
+}
+function sfValidar(){ return [...sfValidarDados(), ...sfValidarConteudo(), ...(_sfModalState.servicoSelecionado ? [] : ['modalidade de frete'])]; }
 
-// ---------- Render ----------
+// Escolher produto do cadastro (datalist) → preenche valor
+function sfEscolherProduto(i, nome){
+  const s = _sfModalState; if(!s || !s.conteudo[i]) return;
+  s.conteudo[i].nome = nome;
+  const p = state.prods.find(x => (x.name || '').toLowerCase() === String(nome).trim().toLowerCase());
+  if(p && Number(p.salePrice) > 0){ s.conteudo[i].valor = Number(p.salePrice); renderSfModal(); }
+  else sfAtualizarTotalConteudo();
+}
+function sfToggleNF(){
+  const s = _sfModalState; s.comNF = !s.comNF;
+  if(s.comNF && s.docTipo === 'declaracao') s.docTipo = 'chave';
+  if(!s.comNF) s.docTipo = 'declaracao';
+  renderSfModal();
+}
+function sfIrEtapa(et){
+  const s = _sfModalState; if(!s) return;
+  if(et === 'dados' && !s.servicoSelecionado) return showToast('❌ Escolha a modalidade do frete.','rd');
+  if(et === 'revisar'){ const e = sfValidarDados(); if(e.length){ s.mostrarErrosDados = true; renderSfModal(); return showToast('❌ Falta: ' + e.join(', '),'rd'); } }
+  s.etapa = et; s.erroEnvio = null; renderSfModal();
+  const m = document.querySelector('#sf-modal-overlay .sfw'); if(m) m.scrollTop = 0;
+}
+
+// ---------- Render (visual estilo SuperFrete) ----------
+const SF_CSS = `<style>
+.sfw{width:640px;max-width:96vw;max-height:94vh;overflow-y:auto;background:#fff;color:#1f2d3d;border-radius:14px;font-family:Poppins,Inter,system-ui,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+.sfw *{box-sizing:border-box}
+.sfw-top{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid #e6ece9;padding:14px 20px 10px}
+.sfw-brand{display:flex;align-items:center;justify-content:space-between}
+.sfw-logo{font-weight:800;color:#0f7a4f;font-size:15px;letter-spacing:.2px}
+.sfw-logo span{color:#2bb673}
+.sfw-x{background:none;border:none;font-size:24px;color:#8a97a5;cursor:pointer;line-height:1}
+.sfw-steps{display:flex;gap:6px;margin-top:10px}
+.sfw-step{flex:1;height:4px;border-radius:4px;background:#e6ece9}
+.sfw-step.on{background:#2bb673}
+.sfw-steplbl{display:flex;justify-content:space-between;font-size:10px;color:#8a97a5;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+.sfw-steplbl b{color:#0f7a4f}
+.sfw-body{padding:18px 20px 22px}
+.sfw-h{font-size:17px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;margin:0 0 2px;color:#1f2d3d}
+.sfw-sub{font-size:12px;color:#7b8794;margin:0 0 14px}
+.sfw-back{background:none;border:none;color:#1f2d3d;font-size:20px;cursor:pointer;padding:0 8px 0 0}
+.sfw-card{position:relative;display:flex;align-items:center;gap:14px;padding:16px 16px;border:1.5px solid #e3e8ee;border-radius:12px;margin-bottom:10px;cursor:pointer;background:#fff;transition:border-color .12s,box-shadow .12s}
+.sfw-card:hover{border-color:#b9e4cf}
+.sfw-card.sel{border-color:#2bb673;box-shadow:0 0 0 3px rgba(43,182,115,.15)}
+.sfw-radio{width:22px;height:22px;border-radius:50%;border:2px solid #9aa5b1;flex:none;display:flex;align-items:center;justify-content:center}
+.sfw-card.sel .sfw-radio{border-color:#2bb673}
+.sfw-card.sel .sfw-radio:after{content:'';width:11px;height:11px;border-radius:50%;background:#2bb673}
+.sfw-svc{font-size:15px;font-weight:600}
+.sfw-prazo{font-size:12px;color:#7b8794;margin-top:2px}
+.sfw-preco{margin-left:auto;text-align:right}
+.sfw-preco b{display:block;font-size:18px;color:#1f2d3d}
+.sfw-preco s{font-size:12px;color:#9aa5b1}
+.sfw-badge{position:absolute;top:-11px;right:14px;background:#7fd3a8;color:#0b3d27;font-size:11px;font-weight:700;padding:3px 10px;border-radius:6px}
+.sfw-btn{width:100%;border:none;border-radius:8px;background:#2bb673;color:#fff;font-weight:700;font-size:14px;letter-spacing:.5px;text-transform:uppercase;padding:14px;cursor:pointer;margin-top:6px}
+.sfw-btn:disabled{background:#a9dcc3;cursor:not-allowed}
+.sfw-btn2{width:100%;border:1.5px solid #2bb673;border-radius:8px;background:#fff;color:#0f7a4f;font-weight:700;font-size:13px;padding:11px;cursor:pointer;margin-top:8px}
+.sfw-rota{margin-top:16px;font-size:12px;color:#4a5866}
+.sfw-rota div{display:flex;gap:8px;margin-bottom:10px}
+.sfw-rota b{color:#1f2d3d}
+.sfw-lbl{display:block;font-size:11px;color:#7b8794;margin-bottom:2px}
+.sfw-in{width:100%;border:none;border-bottom:1.5px solid #cfd8e0;background:transparent;color:#1f2d3d;font-size:14px;padding:6px 2px;outline:none;border-radius:0}
+.sfw-in:focus{border-bottom-color:#2bb673}
+.sfw-in.err{border-bottom-color:#e5484d}
+.sfw-grid{display:grid;gap:14px 16px;margin-bottom:14px}
+.sfw-box{background:#f7f9fa;border:1px solid #e6ece9;border-radius:12px;padding:16px;margin-bottom:14px}
+.sfw-boxh{font-size:14px;font-weight:800;text-transform:uppercase;margin-bottom:10px}
+.sfw-info{display:flex;gap:10px;align-items:flex-start;background:#cfe0ea;color:#22404f;border-radius:10px;padding:12px 14px;font-size:12.5px;margin-bottom:14px}
+.sfw-switch{display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;margin-bottom:12px;user-select:none}
+.sfw-sw{width:38px;height:20px;border-radius:20px;background:#9aa5b1;position:relative;flex:none;transition:background .15s}
+.sfw-sw:after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.sfw-sw.on{background:#2bb673}
+.sfw-sw.on:after{left:20px}
+.sfw-row{display:grid;grid-template-columns:1fr 70px 110px 24px;gap:12px;align-items:end;margin-bottom:10px}
+.sfw-del{background:none;border:none;color:#e5484d;font-size:18px;cursor:pointer;padding-bottom:6px}
+.sfw-link{background:none;border:none;color:#0f7a4f;font-weight:700;font-size:13px;cursor:pointer;text-decoration:underline;padding:0;margin-right:16px}
+.sfw-total{display:flex;justify-content:space-between;align-items:center;background:#eef2f4;border-radius:8px;padding:12px 14px;font-weight:700;margin-top:8px}
+.sfw-tabs{display:flex;gap:8px;margin-bottom:10px}
+.sfw-tab{flex:1;border:1.5px solid #cfd8e0;border-radius:8px;background:#fff;padding:9px;font-size:12px;cursor:pointer;color:#4a5866}
+.sfw-tab.on{border-color:#2bb673;color:#0f7a4f;font-weight:700;background:#f0faf5}
+.sfw-sum{display:flex;justify-content:space-between;font-size:13px;padding:4px 0}
+.sfw-economia{background:#d8f1e4;color:#0f7a4f;border-radius:8px 8px 0 0;padding:9px 14px;font-size:13px;text-align:center;font-weight:600}
+.sfw-frete{border:1px solid #e3e8ee;border-top:none;border-radius:0 0 8px 8px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center}
+.sfw-err{background:#fdecec;color:#b42318;border-radius:8px;padding:10px 12px;font-size:12.5px;margin:10px 0}
+.sfw-mini{font-size:11px;color:#7b8794}
+.sfw-pkg{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:10px}
+.sfw-chip{border:1px solid #cfd8e0;background:#fff;border-radius:16px;padding:4px 10px;font-size:11px;cursor:pointer;color:#4a5866;margin-right:6px}
+.sfw-chip.on{border-color:#2bb673;color:#0f7a4f;background:#f0faf5}
+</style>`;
+
 function renderSfModal(){
   const s = _sfModalState;
   if(!s) return;
@@ -5882,132 +5978,163 @@ function renderSfModal(){
     ov.onclick = e => { if(e.target === ov && !s.enviando) fecharSfModal(); };
     document.body.appendChild(ov);
   }
-  const box = (titulo, html, extra) => `<div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:12px;border:1px solid var(--bd)">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">${titulo}</div>${extra||''}</div>${html}</div>`;
-  const inp = (grupo, campo, val, label, extra) => `<div class="field" style="margin:0"><label style="font-size:9px">${label}</label><input value="${esc(String(val ?? ''))}" oninput="sfSet('${grupo}','${campo}',this.value)" ${extra||''} style="font-size:12px"></div>`;
-  const miniBtn = (txt, fn, ativo) => `<button onclick="${fn}" style="font-size:10px;padding:4px 8px;background:${ativo?'rgba(249,115,22,.15)':'var(--sf2)'};border:1px solid ${ativo?'var(--or)':'var(--bd)'};border-radius:5px;color:${ativo?'var(--or)':'var(--txm)'};cursor:pointer">${txt}</button>`;
-  const head = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div class="mt2" style="margin:0">📮 Etiqueta SuperFrete — Pedido #${esc(String(s.order.orderNum || ''))}</div>
-      <button onclick="fecharSfModal()" ${s.enviando?'disabled':''} style="background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1">×</button></div>`;
   const d = s.dest;
   const servicoSel = s.fretes.find(f => f.id === s.servicoSelecionado);
-  const docLabel = s.docTipo === 'declaracao' ? 'Declaração de conteúdo' : `Nota fiscal${s.nfNumero?' nº '+esc(s.nfNumero):''} (chave ${esc(String(s.chave).slice(0,8))}…)`;
+  const ordem = ['frete','dados','revisar'];
+  const idx = Math.max(0, ordem.indexOf(s.etapa === 'criada' || s.etapa === 'pronta' ? 'revisar' : s.etapa));
+  const top = `<div class="sfw-top"><div class="sfw-brand"><div class="sfw-logo">⚡ Super<span>Frete</span> <span style="color:#7b8794;font-weight:500;font-size:12px">· Pedido #${esc(String(s.order.orderNum || ''))}</span></div>
+      <button class="sfw-x" ${s.enviando?'disabled':''} onclick="fecharSfModal()">×</button></div>
+      <div class="sfw-steps">${ordem.map((_, i) => `<div class="sfw-step ${i <= idx ? 'on' : ''}"></div>`).join('')}</div>
+      <div class="sfw-steplbl">${['Modalidade','Dados','Revise e conclua'].map((t, i) => i === idx ? `<b>${t}</b>` : `<span>${t}</span>`).join('')}</div></div>`;
+  const fmtCep = c => String(c||'').replace(/\D/g,'').replace(/(\d{5})(\d{3})/, '$1$2');
+  const rota = `<div class="sfw-rota">
+      <div><span>○</span><span><b>ORIGEM:</b> ${SF_CEP_ORIGEM}<br>${esc(SF_REMETENTE.address)}, ${esc(SF_REMETENTE.number)} - ${esc(SF_REMETENTE.district)} - ${esc(SF_REMETENTE.city)}/${esc(SF_REMETENTE.state_abbr)}</span></div>
+      <div><span>📍</span><span><b>DESTINO:</b> ${esc(fmtCep(d.cep))}<br>${esc(d.rua || '')}${d.numero?', '+esc(d.numero):''} - ${esc(d.bairro || '')} - ${esc(d.cidade || '')}/${esc(d.uf || '')}</span></div></div>`;
+  const errBox = msg => msg ? `<div class="sfw-err">❌ ${esc(msg)}</div>` : '';
+  let body = '';
 
-  // ===== ETAPA: criada (aguardando pagamento) / pronta =====
-  if(s.etapa === 'criada' || s.etapa === 'pronta'){
-    ov.innerHTML = `<div class="modal" style="width:620px;max-width:95vw;max-height:92vh;overflow-y:auto">${head}
-      ${s.etapa === 'criada' ? `
-        <div style="padding:14px;background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.4);border-radius:8px;margin-bottom:12px;font-size:13px">
-          📝 Etiqueta criada no carrinho da SuperFrete <strong>(ainda não cobrada)</strong>.<br>
-          <span style="font-size:12px;color:var(--txm)">${esc(servicoSel?servicoSel.name:'')} · ${esc(d.nome)} · ${esc(d.cidade)}/${esc(d.uf)} · ${docLabel}</span>
-          <div style="font-size:22px;font-weight:800;color:var(--or);margin-top:8px">${fmtBRL(Number(s.sfPreco || 0))}</div>
+  // ===== 1) MODALIDADE =====
+  if(s.etapa === 'frete'){
+    const validos = s.fretes.filter(f => !f.error && f.price).sort((a, b) => Number(a.price) - Number(b.price));
+    const melhor = validos.length ? Number(validos[0].price) : null;
+    const icon = n => /sedex/i.test(n) ? '🟨' : /pac/i.test(n) ? '🟦' : /mini/i.test(n) ? '📦' : /jadlog/i.test(n) ? '🟥' : /loggi/i.test(n) ? '🔷' : /j&t|jt/i.test(n) ? '🟧' : '📮';
+    const cards = s.carregando ? `<div style="padding:30px;text-align:center;color:#7b8794">⏳ Calculando fretes...</div>`
+      : s.erro ? errBox(s.erro)
+      : !validos.length ? `<div style="padding:20px;text-align:center;color:#7b8794">Nenhuma modalidade disponível. Confira o CEP e a embalagem.</div>`
+      : validos.map(f => {
+          const desc = Number(f.discount || 0);
+          return `<div class="sfw-card ${s.servicoSelecionado === f.id ? 'sel' : ''}" onclick="selSfServico(${f.id})">
+            ${Number(f.price) === melhor ? '<div class="sfw-badge">✨ Melhor preço</div>' : ''}
+            <div class="sfw-radio"></div>
+            <div><div class="sfw-svc">${icon(f.name)} ${esc(String(f.name).toUpperCase())}</div><div class="sfw-prazo">Até ${esc(String(f.delivery_time || '?'))} dia${Number(f.delivery_time) === 1 ? ' útil' : 's úteis'}</div></div>
+            <div class="sfw-preco"><b>${fmtBRL(Number(f.price))}</b>${desc > 0 ? `<s>${fmtBRL(Number(f.price) + desc)}</s>` : ''}</div></div>`;
+        }).join('');
+    const indisp = s.fretes.filter(f => f.error && !f.price);
+    const pk = s.pacote;
+    body = `<div class="sfw-h">Escolha a modalidade</div><p class="sfw-sub">Cada modalidade tem pontos específicos.</p>
+      <div class="sfw-box" style="padding:12px 16px">
+        <div style="display:flex;align-items:end;gap:14px;flex-wrap:wrap">
+          <div style="width:130px"><label class="sfw-lbl">CEP de destino</label><input class="sfw-in" value="${esc(d.cep)}" oninput="sfSet('dest','cep',this.value)" onblur="sfBuscarCep()"></div>
+          <div style="flex:1;font-size:12px;color:#4a5866">📦 ${pk.height}×${pk.width}×${pk.length} cm · ${pk.weight} kg${s.seguro ? ' · com seguro' : ''}
+            <button class="sfw-link" style="margin-left:8px" onclick="_sfModalState.verPacote=!_sfModalState.verPacote;renderSfModal()">${s.verPacote ? 'fechar' : 'editar embalagem'}</button></div>
         </div>
-        ${s.erroEnvio?`<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:12px;color:var(--rd)">❌ ${esc(s.erroEnvio)}</div>`:''}
-        <div style="display:flex;gap:8px">
-          <button class="btn bg2" style="flex:1" ${s.enviando?'disabled':''} onclick="fecharSfModal()">Deixar no carrinho</button>
-          <button class="btn bp" style="flex:2" ${s.enviando?'disabled':''} onclick="sfPagar()">${s.enviando?'⏳ Pagando...':`💰 Pagar com saldo SuperFrete e gerar PDF`}</button>
-        </div>
-        <div style="font-size:10px;color:var(--txd);margin-top:8px;text-align:center">Se deixar no carrinho, dá pra pagar depois no site da SuperFrete.</div>`
-      : `
-        <div style="padding:14px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.4);border-radius:8px;margin-bottom:12px;font-size:13px">
-          ✅ <strong>Etiqueta paga e pronta!</strong><br>
-          <span style="font-size:12px;color:var(--txm)">Rastreio: <span style="font-family:monospace">${esc(s.tracking || 'aguardando — aparece em alguns minutos')}</span></span>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <button class="btn bp" ${s.printUrl?'':'disabled'} onclick="window.open('${esc(s.printUrl)}','_blank')">📄 Abrir etiqueta${s.docTipo==='declaracao'?' + declaração':''}</button>
-          ${s.danfeJunto && s.order.nfeChave ? `<button class="btn bg2" onclick="nfeAbrirDanfe('${s.orderId}')">🧾 Abrir DANFE</button>` : `<button class="btn bg2" onclick="fecharSfModal()">Fechar</button>`}
-        </div>`}
-    </div>`;
-    return;
+        ${s.verPacote ? `<div style="margin-top:10px"><button class="sfw-chip ${pk.height===5&&pk.width===12&&pk.length===18?'on':''}" onclick="sfPacote('padrao')">Padrão 5×12×18</button><button class="sfw-chip ${pk.height===4?'on':''}" onclick="sfPacote('mini')">Mini Envios (4 cm)</button></div>
+          <div class="sfw-pkg">
+            ${[['height','Altura (cm)'],['width','Largura (cm)'],['length','Comp. (cm)'],['weight','Peso (kg)']].map(([k, l]) => `<div><label class="sfw-lbl">${l}</label><input class="sfw-in" type="number" step="0.01" value="${pk[k]}" oninput="sfSet('pacote','${k}',this.value)"></div>`).join('')}
+          </div>
+          <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-top:10px;cursor:pointer"><input type="checkbox" ${s.seguro?'checked':''} onchange="_sfModalState.seguro=this.checked" style="width:auto"> Seguro (declara o valor do conteúdo · mínimo R$ 25,63)</label>
+          <button class="sfw-btn2" onclick="calcularFretesSF()">🔄 Recalcular frete</button>` : ''}
+      </div>
+      ${cards}
+      ${indisp.length ? `<div class="sfw-mini" style="margin-bottom:8px">Indisponível: ${indisp.map(f => esc(f.name || '?')).join(', ')}</div>` : ''}
+      <button class="sfw-btn" ${servicoSel ? '' : 'disabled'} onclick="sfIrEtapa('dados')">Emitir frete com desconto</button>
+      ${rota}`;
   }
 
-  // ===== ETAPA: revisar =====
-  if(s.etapa === 'revisar'){
-    const linhas = s.conteudo.map(c => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span>${esc(String(c.qtd))}× ${esc(c.nome)}</span><span>${fmtBRL(c.qtd * c.valor)}</span></div>`).join('');
-    ov.innerHTML = `<div class="modal" style="width:620px;max-width:95vw;max-height:92vh;overflow-y:auto">${head}
-      <div style="font-size:12px;color:var(--txm);margin-bottom:10px">Confere tudo antes de criar. Ainda <strong>não</strong> é cobrado nada nesse passo.</div>
-      ${box('👤 Destinatário', `<div style="font-size:13px;font-weight:600">${esc(d.nome)} <span style="font-weight:400;color:var(--txd)">· ${esc(d.doc)}</span></div>
-        <div style="font-size:12px">${esc(d.rua)}, ${esc(d.numero || 'S/N')}${d.compl?' — '+esc(d.compl):''} · ${esc(d.bairro)}</div>
-        <div style="font-size:12px;color:var(--txd)">${esc(d.cidade)}/${esc(d.uf)} · CEP ${esc(d.cep)}${d.fone?' · '+esc(d.fone):''}</div>`)}
-      ${box('📦 Conteúdo · ' + docLabel, linhas + `<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;border-top:1px solid var(--bd);margin-top:6px;padding-top:6px"><span>Total declarado</span><span>${fmtBRL(sfTotalConteudo())}</span></div>`)}
-      ${box('🚚 Frete', `<div style="display:flex;justify-content:space-between;font-size:13px"><span>${esc(servicoSel?servicoSel.name:'')} · até ${esc(String(servicoSel&&servicoSel.delivery_time||'?'))} dias · ${s.pacote.height}×${s.pacote.width}×${s.pacote.length}cm ${s.pacote.weight}kg${s.seguro?' · com seguro':''}</span><strong style="color:var(--or)">${fmtBRL(Number(servicoSel?servicoSel.price:0))}</strong></div>`)}
-      ${s.erroEnvio?`<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:12px;color:var(--rd)">❌ SuperFrete recusou: ${esc(s.erroEnvio)}</div>`:''}
-      <div style="display:flex;gap:8px">
-        <button class="btn bg2" style="flex:1" ${s.enviando?'disabled':''} onclick="_sfModalState.etapa='editar';_sfModalState.erroEnvio=null;renderSfModal()">← Voltar e editar</button>
-        <button class="btn bp" style="flex:2" ${s.enviando?'disabled':''} onclick="sfCriarEtiqueta()">${s.enviando?'⏳ Criando...':'✅ Criar etiqueta'}</button>
-      </div></div>`;
-    return;
+  // ===== 2) DADOS =====
+  else if(s.etapa === 'dados'){
+    const er = s.mostrarErrosDados ? sfValidarDados() : [];
+    const cls = k => er.includes(k) ? 'sfw-in err' : 'sfw-in';
+    const fld = (campo, label, extra, errKey) => `<div><label class="sfw-lbl">${label}</label><input class="${cls(errKey || campo)}" value="${esc(String(d[campo] ?? ''))}" oninput="sfSet('dest','${campo}',this.value)" ${extra || ''}></div>`;
+    body = `<div style="display:flex;align-items:center"><button class="sfw-back" onclick="sfIrEtapa('frete')">←</button><div class="sfw-h">Dados do destinatário</div></div>
+      <p class="sfw-sub">Já preenchido com os dados do pedido. Confira e ajuste se precisar.</p>
+      <div class="sfw-grid" style="grid-template-columns:2fr 1fr">${fld('nome','Nome completo','', 'nome')}${fld('doc','CPF/CNPJ','', 'CPF/CNPJ')}</div>
+      <div class="sfw-grid" style="grid-template-columns:1fr 1fr">${fld('fone','Celular')}${fld('email','E-mail (opcional)')}</div>
+      <div class="sfw-grid" style="grid-template-columns:120px 1fr 90px">
+        <div><label class="sfw-lbl">CEP</label><input class="${cls('CEP')}" value="${esc(d.cep)}" oninput="sfSet('dest','cep',this.value)" onblur="sfBuscarCep()"></div>
+        ${fld('rua','Endereço','', 'rua')}${fld('numero','Número')}</div>
+      <div class="sfw-grid" style="grid-template-columns:1fr 1fr">${fld('compl','Complemento')}${fld('bairro','Bairro','', 'bairro')}</div>
+      <div class="sfw-grid" style="grid-template-columns:1fr 70px">${fld('cidade','Cidade','', 'cidade/UF')}${fld('uf','UF','maxlength="2"', 'cidade/UF')}</div>
+      ${er.length ? errBox('Falta preencher: ' + er.join(', ')) : ''}
+      <button class="sfw-btn" onclick="sfIrEtapa('revisar')">Continuar</button>
+      <div class="sfw-mini" style="text-align:center;margin-top:8px">Mudar aqui vale só pra etiqueta — não altera o pedido.</div>`;
   }
 
-  // ===== ETAPA: editar =====
-  const validos = s.fretes.filter(f => !f.error && f.price);
-  const melhor = validos.length ? Math.min(...validos.map(f => Number(f.price))) : null;
-  const cards = s.carregando ? `<div style="padding:24px;text-align:center;color:var(--txd);font-size:13px">⏳ Calculando frete...</div>`
-    : s.erro ? `<div style="padding:14px;text-align:center;color:var(--rd);font-size:12px">❌ ${esc(s.erro)}</div>`
-    : !validos.length ? `<div style="padding:14px;text-align:center;color:var(--txd);font-size:12px">Clique em "Cotar frete".</div>`
-    : validos.map(f => {
-      const sel = s.servicoSelecionado === f.id, top = Number(f.price) === melhor;
-      return `<div onclick="selSfServico(${f.id})" style="cursor:pointer;padding:10px 12px;border-radius:8px;border:2px solid ${sel?'var(--or)':(top?'rgba(16,185,129,.4)':'var(--bd)')};background:${sel?'rgba(249,115,22,.08)':'var(--sf2)'};margin-bottom:6px;display:flex;align-items:center;gap:10px">
-        <div style="width:18px;height:18px;border-radius:50%;border:2px solid ${sel?'var(--or)':'var(--bd)'};background:${sel?'var(--or)':'transparent'}"></div>
-        <div style="flex:1"><div style="font-weight:700;font-size:13px">${esc(f.name)}${top?' <span style="font-size:9px;background:#10b981;color:#fff;padding:2px 6px;border-radius:8px;margin-left:4px">MELHOR PREÇO</span>':''}</div>
-        <div style="font-size:11px;color:var(--txd)">Até ${esc(String(f.delivery_time||'?'))} dias úteis${f.company&&f.company.name?' · '+esc(f.company.name):''}</div></div>
-        <div style="font-weight:800;font-size:17px;color:${top?'#10b981':'var(--or)'}">${fmtBRL(Number(f.price))}</div></div>`;
+  // ===== 3) REVISE E CONCLUA =====
+  else if(s.etapa === 'revisar'){
+    const er = s.mostrarErrosConteudo ? sfValidarConteudo() : [];
+    const nomes = [...new Set(state.prods.map(p => p.name).filter(Boolean))];
+    const linhas = s.conteudo.map((c, i) => {
+      const bad = k => s.mostrarErrosConteudo && ((k === 'nome' && !String(c.nome).trim()) || (k === 'qtd' && !(Number(c.qtd) >= 1)) || (k === 'valor' && !(Number(c.valor) >= 0.01)));
+      return `<div class="sfw-row">
+        <div><label class="sfw-lbl">Descrição</label><input class="sfw-in ${bad('nome')?'err':''}" list="sf-prods" value="${esc(c.nome)}" placeholder="Digite ou escolha um produto" onchange="sfEscolherProduto(${i},this.value)" oninput="sfSetConteudo(${i},'nome',this.value)"></div>
+        <div><label class="sfw-lbl">Quant.</label><input class="sfw-in ${bad('qtd')?'err':''}" type="number" min="1" value="${c.qtd}" oninput="sfSetConteudo(${i},'qtd',this.value)"></div>
+        <div><label class="sfw-lbl">Valor unit. (R$)</label><input class="sfw-in ${bad('valor')?'err':''}" type="number" min="0.01" step="0.01" value="${c.valor}" oninput="sfSetConteudo(${i},'valor',this.value)"></div>
+        <button class="sfw-del" title="Remover" onclick="sfDelConteudo(${i})">×</button></div>`;
     }).join('');
-  const indisp = s.fretes.filter(f => f.error && !f.price).map(f => `${esc(f.name||'?')}: ${esc(typeof f.error==='string'?f.error:(f.error.message||JSON.stringify(f.error)).slice(0,90))}`).join(' · ');
-  const linhasConteudo = s.conteudo.map((c, i) => `<div style="display:grid;grid-template-columns:1fr 60px 90px 26px;gap:6px;margin-bottom:6px">
-      <input value="${esc(c.nome)}" placeholder="Ex: Smartwatch" oninput="sfSetConteudo(${i},'nome',this.value)" style="font-size:12px">
-      <input type="number" min="1" value="${c.qtd}" oninput="sfSetConteudo(${i},'qtd',this.value)" style="font-size:12px">
-      <input type="number" min="0.01" step="0.01" value="${c.valor}" oninput="sfSetConteudo(${i},'valor',this.value)" style="font-size:12px" title="Valor unitário (mín. R$ 0,01)">
-      <button onclick="sfDelConteudo(${i})" style="background:none;border:1px solid var(--bd);border-radius:5px;color:var(--rd);cursor:pointer">×</button></div>`).join('');
-  const docRadio = (v, txt) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 8px;border-radius:6px;border:1px solid ${s.docTipo===v?'var(--or)':'var(--bd)'};background:${s.docTipo===v?'rgba(249,115,22,.08)':'transparent'}"><input type="radio" name="sfdoc" ${s.docTipo===v?'checked':''} onchange="sfDocTipo('${v}')" style="width:auto">${txt}</label>`;
-  const chaveLen = String(s.chave||'').replace(/\D/g,'').length;
-  const erros = sfValidar();
+    const chaveLen = String(s.chave || '').replace(/\D/g,'').length;
+    const preco = servicoSel ? Number(servicoSel.price) : Number(s.sfPreco || 0);
+    const desconto = servicoSel ? Number(servicoSel.discount || 0) : 0;
+    body = `<div style="display:flex;align-items:center"><button class="sfw-back" ${s.enviando?'disabled':''} onclick="sfIrEtapa('dados')">←</button><div class="sfw-h">Revise e conclua</div></div>
+      <p class="sfw-sub">${esc(d.nome)} · ${esc(d.rua)}${d.numero?', '+esc(d.numero):''} · ${esc(d.cidade)}/${esc(d.uf)} — <button class="sfw-link" onclick="sfIrEtapa('dados')">editar</button></p>
+      <div class="sfw-box">
+        <div class="sfw-boxh">Conteúdo do pacote</div>
+        <div class="sfw-switch" onclick="sfToggleNF()"><div class="sfw-sw ${s.comNF?'on':''}"></div>Prefiro informar a nota fiscal</div>
+        ${s.comNF ? `
+          <div class="sfw-tabs"><button class="sfw-tab ${s.docTipo==='chave'?'on':''}" onclick="sfDocTipo('chave')">🔑 Chave de acesso</button><button class="sfw-tab ${s.docTipo==='xml'?'on':''}" onclick="sfDocTipo('xml')">📎 Arquivo XML</button></div>
+          ${s.docTipo === 'chave' ? `<div style="margin-bottom:12px"><label class="sfw-lbl">Chave de acesso da NF-e (44 dígitos)${s.nfNumero?' · NF nº '+esc(s.nfNumero):''}</label>
+              <input class="sfw-in ${s.mostrarErrosConteudo&&chaveLen!==44?'err':''}" style="font-family:monospace;font-size:12px" maxlength="54" value="${esc(s.chave)}" oninput="_sfModalState.chave=this.value.replace(/\\D/g,'');document.getElementById('sf-chave-len').textContent=_sfModalState.chave.length+'/44'">
+              <div id="sf-chave-len" class="sfw-mini">${chaveLen}/44</div></div>`
+            : `<div style="margin-bottom:12px"><input type="file" accept=".xml,text/xml" onchange="sfLerXml(this)" style="font-size:12px">
+              ${s.xmlNome ? `<div class="sfw-mini" style="color:#0f7a4f;margin-top:4px">✅ ${esc(s.xmlNome)} · NF nº ${esc(s.nfNumero||'?')}</div>` : ''}</div>`}
+          ${s.order.nfeChave ? `<label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-bottom:12px;cursor:pointer"><input type="checkbox" ${s.danfeJunto?'checked':''} onchange="_sfModalState.danfeJunto=this.checked" style="width:auto"> Abrir o DANFE pra imprimir junto</label>` : ''}`
+          : `<div class="sfw-info"><span>ⓘ</span><span>Se você realiza envios para atividades econômicas, é recomendado a emissão com Nota Fiscal. Sem nota, vai a <b>declaração de conteúdo</b> com os itens abaixo.</span></div>`}
+        ${linhas}
+        <datalist id="sf-prods">${nomes.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
+        <div style="margin:4px 0 2px"><button class="sfw-link" onclick="sfAddConteudo()">+ Adicionar</button><button class="sfw-link" onclick="sfModoTroca()">🔁 Troca/garantia (R$ 0,01)</button></div>
+        <div class="sfw-total"><span>Valor total declarado</span><span id="sf-total-conteudo">${fmtBRL(sfTotalConteudo())}</span></div>
+      </div>
+      ${er.length ? errBox('Corrija: ' + er.join(' · ')) : ''}
+      ${errBox(s.erroEnvio)}
+      ${desconto > 0 ? `<div class="sfw-economia">✨ Economia de ${fmtBRL(desconto)} na SuperFrete!</div>` : ''}
+      <div class="sfw-frete" style="${desconto > 0 ? '' : 'border-top:1px solid #e3e8ee;border-radius:8px'}">
+        <div><div style="font-weight:600">Total do frete:</div><div class="sfw-mini">${esc(servicoSel ? servicoSel.name : '')} · até ${esc(String(servicoSel && servicoSel.delivery_time || '?'))} dias úteis</div></div>
+        <div style="text-align:right">${desconto > 0 ? `<s class="sfw-mini">${fmtBRL(preco + desconto)}</s><br>` : ''}<b style="font-size:18px">${fmtBRL(preco)}</b></div></div>
+      <button class="sfw-btn" style="margin-top:14px" ${s.enviando?'disabled':''} onclick="sfEmitir()">${s.enviando ? '⏳ ' + esc(s.enviandoMsg || 'Emitindo...') : 'Emitir frete'}</button>
+      <div class="sfw-mini" style="text-align:center;margin-top:8px">Vai pedir sua confirmação antes de pagar com o saldo da carteira SuperFrete.</div>`;
+  }
 
-  ov.innerHTML = `<div class="modal" style="width:760px;max-width:96vw;max-height:94vh;overflow-y:auto">${head}
-    ${box('👤 Destinatário', `<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:8px">${inp('dest','nome',d.nome,'Nome completo')}${inp('dest','doc',d.doc,'CPF/CNPJ')}</div>
-      <div style="display:grid;grid-template-columns:110px 2fr 80px;gap:8px;margin-bottom:8px">
-        <div class="field" style="margin:0"><label style="font-size:9px">CEP</label><input value="${esc(d.cep)}" oninput="sfSet('dest','cep',this.value)" onblur="sfBuscarCep()" style="font-size:12px"></div>
-        ${inp('dest','rua',d.rua,'Rua')}${inp('dest','numero',d.numero,'Número')}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 60px;gap:8px;margin-bottom:8px">${inp('dest','compl',d.compl,'Complemento')}${inp('dest','bairro',d.bairro,'Bairro')}${inp('dest','cidade',d.cidade,'Cidade')}${inp('dest','uf',d.uf,'UF','maxlength="2"')}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${inp('dest','fone',d.fone,'Telefone')}${inp('dest','email',d.email,'E-mail (opcional)')}</div>`,
-      `<span style="font-size:10px;color:var(--txd)">Alterar aqui não muda o pedido</span>`)}
+  // ===== CARRINHO (não pago) =====
+  else if(s.etapa === 'criada'){
+    body = `<div class="sfw-h">Etiqueta no carrinho</div><p class="sfw-sub">Criada na SuperFrete, mas <b>ainda não paga</b>.</p>
+      <div class="sfw-box"><div class="sfw-sum"><span>${esc(d.nome || s.order.clientName || '')}</span><b>${fmtBRL(Number(s.sfPreco || 0))}</b></div>
+      <div class="sfw-mini">${esc(s.order.superfreteService || (servicoSel && servicoSel.name) || '')}</div></div>
+      ${errBox(s.erroEnvio)}
+      <button class="sfw-btn" ${s.enviando?'disabled':''} onclick="sfPagar()">${s.enviando ? '⏳ Pagando...' : '💰 Pagar com saldo e gerar etiqueta'}</button>
+      <button class="sfw-btn2" ${s.enviando?'disabled':''} onclick="fecharSfModal()">Deixar no carrinho (pago depois no site)</button>`;
+  }
 
-    ${box('📦 Conteúdo da encomenda', `<div style="display:grid;grid-template-columns:1fr 60px 90px 26px;gap:6px;font-size:9px;color:var(--txd);text-transform:uppercase;margin-bottom:4px"><span>Produto</span><span>Qtd</span><span>Valor un. (R$)</span><span></span></div>
-      ${linhasConteudo}
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
-        <button onclick="sfAddConteudo()" style="font-size:11px;padding:4px 8px;background:none;border:1px dashed var(--bd);border-radius:5px;color:var(--txm);cursor:pointer">+ Item</button>
-        <span style="font-size:12px">Total declarado: <strong id="sf-total-conteudo">${fmtBRL(sfTotalConteudo())}</strong></span></div>`,
-      miniBtn('🔁 Troca/garantia (R$ 0,01)', 'sfModoTroca()', false))}
+  // ===== PRONTA =====
+  else if(s.etapa === 'pronta'){
+    body = `<div style="text-align:center;padding:10px 0 4px"><div style="font-size:44px">✅</div><div class="sfw-h" style="margin-top:6px">Frete emitido!</div>
+      <p class="sfw-sub">Rastreio: <b style="font-family:monospace;color:#1f2d3d">${esc(s.tracking || 'aparece em alguns minutos')}</b></p></div>
+      <button class="sfw-btn" ${s.printUrl?'':'disabled'} onclick="window.open('${esc(s.printUrl)}','_blank')">📄 Imprimir etiqueta${s.comNF ? '' : ' + declaração'}</button>
+      ${s.danfeJunto && s.order.nfeChave ? `<button class="sfw-btn2" onclick="nfeAbrirDanfe('${s.orderId}')">🧾 Imprimir DANFE</button>` : ''}
+      <button class="sfw-btn2" onclick="fecharSfModal()">Fechar</button>`;
+  }
 
-    ${box('📋 Documento que vai junto', `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px">
-        ${docRadio('declaracao','📝 Declaração de conteúdo')}${docRadio('chave','🔑 NF — chave de acesso')}${docRadio('xml','📎 NF — arquivo XML')}</div>
-      ${s.docTipo === 'chave' ? `<div class="field" style="margin:0"><label style="font-size:9px">Chave de acesso (44 dígitos)${s.nfNumero?' · NF nº '+esc(s.nfNumero):''}</label>
-          <input value="${esc(s.chave)}" maxlength="54" oninput="_sfModalState.chave=this.value.replace(/\\D/g,'');document.getElementById('sf-chave-len').textContent=_sfModalState.chave.length+'/44'" style="font-family:monospace;font-size:11px">
-          <div id="sf-chave-len" style="font-size:10px;color:var(--txd);margin-top:2px">${chaveLen}/44</div></div>` : ''}
-      ${s.docTipo === 'xml' ? `<input type="file" accept=".xml,text/xml" onchange="sfLerXml(this)" style="font-size:11px">
-          ${s.xmlNome?`<div style="font-size:11px;color:#10b981;margin-top:4px">✅ ${esc(s.xmlNome)} · NF nº ${esc(s.nfNumero||'?')} · chave ${esc(s.chave)}</div>`:''}` : ''}
-      ${s.docTipo !== 'declaracao' && s.order.nfeChave ? `<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:8px;cursor:pointer"><input type="checkbox" ${s.danfeJunto?'checked':''} onchange="_sfModalState.danfeJunto=this.checked" style="width:auto"> Abrir o DANFE pra imprimir junto com a etiqueta</label>` : ''}
-      ${s.docTipo === 'declaracao' ? `<div style="font-size:10px;color:var(--txd)">A declaração sai no PDF junto com a etiqueta, com os itens e valores acima.</div>` : ''}`)}
-
-    ${box('📐 Embalagem', `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${inp('pacote','height',s.pacote.height,'Altura (cm)','type="number" step="0.1"')}${inp('pacote','width',s.pacote.width,'Largura (cm)','type="number" step="0.1"')}${inp('pacote','length',s.pacote.length,'Comp. (cm)','type="number" step="0.1"')}${inp('pacote','weight',s.pacote.weight,'Peso (kg)','type="number" step="0.01"')}</div>
-      <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:8px;cursor:pointer"><input type="checkbox" ${s.seguro?'checked':''} onchange="_sfModalState.seguro=this.checked;calcularFretesSF()" style="width:auto"> Seguro: declarar o valor do conteúdo (frete fica mais caro)</label>`,
-      `<div style="display:flex;gap:4px">${miniBtn('Padrão 5×12×18','sfPacote(\'padrao\')',s.pacote.height===5&&s.pacote.width===12&&s.pacote.length===18)}${miniBtn('Mini Envios 4cm','sfPacote(\'mini\')',s.pacote.height===4)}</div>`)}
-
-    ${box('🚚 Frete', cards + (indisp?`<div style="font-size:10px;color:var(--txd);margin-top:4px">Indisponíveis: ${indisp}</div>`:''),
-      `<button onclick="calcularFretesSF()" style="font-size:11px;padding:4px 10px;background:var(--sf2);border:1px solid var(--bd);border-radius:5px;color:var(--or);cursor:pointer;font-weight:600">🔄 Cotar frete</button>`)}
-
-    ${erros.length && s.servicoSelecionado ? `<div style="font-size:11px;color:var(--rd);margin-bottom:8px">Falta: ${esc(erros.join(', '))}</div>` : ''}
-    <div style="display:flex;gap:8px;padding-top:10px;border-top:1px solid var(--bd)">
-      <button class="btn bg2" style="flex:1" onclick="fecharSfModal()">Cancelar</button>
-      <button class="btn bp" style="flex:2" onclick="sfIrRevisar()">${servicoSel?`Revisar → ${esc(servicoSel.name)} ${fmtBRL(Number(servicoSel.price))}`:'Escolha um frete'}</button>
-    </div>
-  </div>`;
+  ov.innerHTML = `${SF_CSS}<div class="sfw">${top}<div class="sfw-body">${body}</div></div>`;
 }
 
-function sfIrRevisar(){
+function sfIrRevisar(){ sfIrEtapa('revisar'); }
+
+// Botão "Emitir frete": valida → confirma → cria no carrinho → paga
+async function sfEmitir(){
+  const s = _sfModalState; if(!s || s.enviando) return;
+  s.mostrarErrosConteudo = true;
   const e = sfValidar();
-  if(e.length){ renderSfModal(); return showToast('❌ Falta: ' + e.join(', '),'rd'); }
-  _sfModalState.etapa = 'revisar'; _sfModalState.erroEnvio = null; renderSfModal();
+  if(e.length){ renderSfModal(); return showToast('❌ Corrija: ' + e.join(', '),'rd'); }
+  const servico = s.fretes.find(f => f.id === s.servicoSelecionado) || {};
+  if(!confirm(`Emitir ${servico.name || 'frete'} por ${fmtBRL(Number(servico.price || 0))} pago com o saldo da carteira SuperFrete?\n\nDestinatário: ${s.dest.nome}\nDocumento: ${s.comNF ? 'Nota fiscal' : 'Declaração de conteúdo'} · ${fmtBRL(sfTotalConteudo())}`)) return;
+  s.enviandoMsg = 'Criando etiqueta...';
+  await sfCriarEtiqueta();
+  if(!_sfModalState || !s.sfId || s.erroEnvio) return;
+  s.etapa = 'revisar'; s.enviando = true; s.enviandoMsg = 'Pagando...'; renderSfModal();
+  const pay = await sfApi('POST', '/checkout', { orders: [s.sfId] });
+  if(!_sfModalState) return;
+  if(!pay.ok){ s.enviando = false; s.etapa = 'criada'; s.erroEnvio = 'Pagamento não concluído: ' + sfErro(pay) + ' — confira o saldo da carteira SuperFrete.'; renderSfModal(); return; }
+  s.enviandoMsg = 'Gerando etiqueta...'; renderSfModal();
+  await sfAtualizarInfo();
 }
 
 // ---------- Criar (carrinho, sem cobrar) ----------
@@ -6096,7 +6223,7 @@ async function pagarEtiquetaPendenteSF(orderId){
   const o = state.orders.find(x => x.id === orderId) || orderModalData;
   if(!o || !o.superfreteId) return;
   _sfModalState = { orderId: o.id, order: o, etapa: 'criada', dest: { nome: o.clientName||'', cidade: o.city||'', uf: o.state||'' },
-    conteudo: [], fretes: [], docTipo: o.superfreteDoc || 'declaracao', chave: o.sfNFKey||'', nfNumero: o.sfNFNumero||'',
+    conteudo: [], fretes: [], docTipo: o.superfreteDoc || 'declaracao', comNF: (o.superfreteDoc||'declaracao') !== 'declaracao', chave: o.sfNFKey||'', nfNumero: o.sfNFNumero||'',
     danfeJunto: false, sfId: o.superfreteId, sfPreco: o.superfretePrice, servicoSelecionado: null, pacote: {...SF_PADRAO} };
   renderSfModal();
 }
