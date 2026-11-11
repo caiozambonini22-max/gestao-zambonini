@@ -1760,12 +1760,13 @@ function renderOrderModal(){
               <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="imprimirComprovante('${o.id||''}')">🖨️ Impressora Térmica</button>
               <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="gerarComprovanteImagem('${o.id||''}')">🖼️ Comprovante Img</button>
             </div>
+            <div style="margin-top:8px">${nfeBlocoPedido(o)}</div>
             <div style="margin-top:8px">
               ${o.blingNFId?`<div style="padding:8px;background:${o.blingNFStatus==='autorizada'?'rgba(16,185,129,.1)':'rgba(34,197,94,.1)'};border:1px solid ${o.blingNFStatus==='autorizada'?'rgba(16,185,129,.3)':'rgba(34,197,94,.3)'};border-radius:6px;font-size:11px;color:${o.blingNFStatus==='autorizada'?'#10b981':'var(--gr)'};margin-bottom:6px">
                 🧾 <strong>NF ${esc(o.blingNFStatus||'rascunho')}:</strong> #${esc(o.blingNFNumero||o.blingNFId)}
                 ${o.blingNFKey?`<div style="font-size:9px;font-family:monospace;color:var(--txd);margin-top:3px;word-break:break-all">${esc(o.blingNFKey)}</div>`:''}
               </div>`:''}
-              <button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:9px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#3b82f6;font-weight:600" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF':'🧾 Emitir NF via Bling'}</button>
+              <button class="btn" style="justify-content:center;width:100%;font-size:10px;padding:6px;background:transparent;border:1px dashed rgba(59,130,246,.4);color:#3b82f6;opacity:.8" onclick="emitirNFPedido('${o.id||''}')">${o.blingNFId?'🔄 Recriar NF no Bling (reserva)':'Emitir via Bling (reserva)'}</button>
               ${o.blingNFId?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px">
                 <button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="visualizarNF('${o.id||''}')">👁️ Ver NF</button>
                 ${o.blingNFStatus!=='autorizada'?`<button class="btn" style="justify-content:center;font-size:11px;padding:7px 6px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.4);color:#10b981;font-weight:600" onclick="autorizarNF('${o.id||''}')">✅ Autorizar SEFAZ</button>`:`<button class="btn bg2" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="baixarDANFE('${o.id||''}')">📄 DANFE</button>`}
@@ -6442,5 +6443,355 @@ function saveMaqModal(){
   document.getElementById('maq-modal-overlay').remove();
   maqModalData=null;
   render();
+}
+</script>
+<script>
+// ============ EMISSOR NF-e PRÓPRIO (VPS → SEFAZ direto) ============
+// Proxy: /api/nfe-proxy (Vercel) → VPS srv2126279 → SEFAZ-SP
+// A chave do ERP fica só no navegador (localStorage), nunca no código (repo público).
+const NFE_PROXY = '/api/nfe-proxy';
+
+function nfeGetKey(forcar){
+  let k = '';
+  try { k = localStorage.getItem('nfeErpKey') || ''; } catch(e) {}
+  if(!k || forcar){
+    k = (prompt('Cole a CHAVE DO ERP do emissor de NF-e (NFE_ERP_KEY).\nSó precisa fazer isso uma vez neste navegador.') || '').trim();
+    if(k){ try { localStorage.setItem('nfeErpKey', k); } catch(e) {} }
+  }
+  return k;
+}
+
+async function nfeCall(path, method, body, raw){
+  const key = nfeGetKey();
+  if(!key) throw new Error('Chave do ERP não informada');
+  const r = await fetch(NFE_PROXY + '?path=' + encodeURIComponent(path), {
+    method: method || 'GET',
+    headers: { 'Content-Type': 'application/json', 'x-nfe-key': key },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if(r.status === 401){
+    try { localStorage.removeItem('nfeErpKey'); } catch(e) {}
+    throw new Error('Chave do ERP inválida — tente de novo e cole a chave certa');
+  }
+  if(raw){ if(!r.ok){ const j = await r.json().catch(()=>({})); throw new Error(j.erro || ('Erro ' + r.status)); } return r; }
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.erro || ('Erro ' + r.status));
+  return j;
+}
+
+// ---------- Bloco no modal do pedido ----------
+function nfeBlocoPedido(o){
+  const id = o.id || '';
+  const st = o.nfeStatus;
+  const cores = { autorizada:'#10b981', pendente:'#f97316', rejeitada:'#ef4444', denegada:'#8b5cf6', cancelada:'#94a3b8' };
+  const cor = cores[st] || '#10b981';
+  const homolog = o.nfeAmbiente === 'homologacao';
+  let card = '';
+  if(st){
+    card = `<div style="padding:8px;background:${cor}1a;border:1px solid ${cor}55;border-radius:6px;font-size:11px;color:${cor};margin-bottom:6px">
+      🧾 <strong>NF-e ${esc(st)}</strong>${o.nfeNumero?` · nº ${esc(String(o.nfeNumero))}/${esc(String(o.nfeSerie||''))}`:''}
+      ${homolog?'<span style="font-size:9px;padding:1px 6px;margin-left:4px;border-radius:4px;background:rgba(249,115,22,.2);color:var(--or)">HOMOLOGAÇÃO · sem valor fiscal</span>':''}
+      ${(st==='rejeitada'||st==='pendente') && o.nfeMotivo?`<div style="margin-top:3px;color:var(--txm)">${esc(o.nfeMotivo)}</div>`:''}
+      ${o.nfeChave?`<div style="font-size:9px;font-family:monospace;color:var(--txd);margin-top:3px;word-break:break-all">${esc(o.nfeChave)}</div>`:''}
+    </div>`;
+  }
+  const btn = (txt, fn, estilo) => `<button class="btn ${estilo||'bg2'}" style="justify-content:center;font-size:11px;padding:7px 6px" onclick="${fn}('${id}')">${txt}</button>`;
+  let acoes = '';
+  if(!st || st === 'rejeitada' || st === 'cancelada'){
+    acoes = `<button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:10px;background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);color:#10b981;font-weight:700" onclick="abrirEmissorNFe('${id}')">${st?'🔄 Emitir NF-e de novo':'🧾 Emitir NF-e (emissor próprio)'}</button>`;
+  } else if(st === 'autorizada'){
+    acoes = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${btn('📄 DANFE','nfeAbrirDanfe')}${btn('💾 XML','nfeBaixarXml')}${btn('✏️ Carta de correção','nfeCartaCorrecao')}${btn('🚫 Cancelar NF','nfeCancelar')}</div>`;
+  } else if(st === 'pendente'){
+    acoes = btn('🔄 Consultar SEFAZ','nfeConsultar') ;
+  }
+  return card + acoes;
+}
+
+// ---------- Modal de emissão ----------
+let _nfeState = null;
+
+function nfeTipoPagamento(o){
+  const p = (o.payments || [])[0];
+  if(!p) return { forma:'pix', label:'PIX' };
+  if(p.type === 'dinheiro') return { forma:'dinheiro', label:'Dinheiro' };
+  if(p.type === 'pix') return { forma:'pix', label:'PIX' };
+  if(p.type === 'cartao'){
+    if(p.mode === 'link') return { forma:'credito', label:'Cartão de crédito (link)' };
+    return { forma:'credito', label:'Cartão de crédito' + (Number(p.installments||1)>1?` ${p.installments}x`:'') };
+  }
+  return { forma:'outros', label:'Outros' };
+}
+
+async function abrirEmissorNFe(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o) return showToast('❌ Pedido não encontrado.','rd');
+  const doc = (o.cpfCnpj||'').replace(/\D/g,'');
+  if(!o.clientName) return showToast('❌ Pedido sem nome do cliente.','rd');
+  if(doc.length !== 11 && doc.length !== 14) return showToast('❌ CPF/CNPJ do cliente inválido. Preenche no pedido.','rd');
+  if(!o.street || (o.cep||'').replace(/\D/g,'').length !== 8) return showToast('❌ Endereço incompleto (rua + CEP).','rd');
+  if(!nfeGetKey()) return;
+
+  const allItems = (o.items && o.items.length) ? o.items : [{productId:o.productId, quantity:o.quantity, salePrice:o.salePrice}];
+  const items = allItems.map((it, idx) => {
+    const p = state.prods.find(x => x.id === it.productId);
+    const incluir = typeof it.incluirNaNF === 'boolean' ? it.incluirNaNF : (p && p.emiteNF !== false && !it.isGift);
+    return { ...it, _idx: idx, _p: p, incluir: !!incluir };
+  });
+  _nfeState = {
+    orderId: o.id, order: o, items, enviando: false, erro: '',
+    indPres: o.deliveryMethod === 'retirada' ? '1' : '2',
+    pag: nfeTipoPagamento(o),
+    sefaz: null,
+  };
+  nfeRenderModal();
+  try { _nfeState.sefaz = await nfeCall('status'); } catch(e) { _nfeState.sefaz = { erro: e.message }; }
+  if(_nfeState) nfeRenderModal();
+}
+
+function nfeFecharModal(){
+  _nfeState = null;
+  const ov = document.getElementById('nfe-modal-overlay');
+  if(ov) ov.remove();
+}
+
+function nfeToggleItem(idx){
+  if(!_nfeState) return;
+  const it = _nfeState.items.find(x => x._idx === idx);
+  if(it) it.incluir = !it.incluir;
+  nfeRenderModal();
+}
+
+function nfeCalcular(s){
+  const itensNF = s.items.filter(x => x.incluir);
+  const bruto = itensNF.reduce((a,it) => a + Number(it.salePrice||0) * Number(it.quantity||1), 0);
+  const desc = Math.min(Number(s.order.discount||0), Math.max(0, bruto - 0.01));
+  return { itensNF, bruto, desc, total: Math.round((bruto - desc) * 100) / 100 };
+}
+
+function nfeRenderModal(){
+  const s = _nfeState;
+  if(!s) return;
+  let ov = document.getElementById('nfe-modal-overlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'nfe-modal-overlay';
+    ov.className = 'overlay';
+    ov.style.zIndex = '10000';
+    ov.onclick = e => { if(e.target === ov && !s.enviando) nfeFecharModal(); };
+    document.body.appendChild(ov);
+  }
+  const o = s.order;
+  const c = nfeCalcular(s);
+  const semNcm = c.itensNF.filter(x => !x._p || !(x._p.ncm||'').replace(/\D/g,'')).map(x => x._p ? x._p.name : '(produto removido)');
+  const sf = s.sefaz;
+  const homolog = sf && sf.ambiente === 2;
+  const sefazOk = sf && String(sf.cStat) === '107';
+  const bloqueado = s.enviando || !c.itensNF.length || semNcm.length > 0 || !sefazOk;
+
+  const linha = it => {
+    const p = it._p; const sub = Number(it.salePrice||0) * Number(it.quantity||1);
+    return `<div onclick="nfeToggleItem(${it._idx})" style="cursor:pointer;display:grid;grid-template-columns:28px 1fr 50px 80px;gap:10px;align-items:center;padding:10px 12px;border-radius:8px;border:1px solid ${it.incluir?'rgba(16,185,129,.4)':'var(--bd)'};background:${it.incluir?'rgba(16,185,129,.05)':'var(--sf3)'};margin-bottom:6px">
+      <div style="width:22px;height:22px;border-radius:5px;border:2px solid ${it.incluir?'#10b981':'var(--bd)'};background:${it.incluir?'#10b981':'transparent'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:bold">${it.incluir?'✓':''}</div>
+      <div><div style="font-weight:600;font-size:13px">${esc(p?p.name:'(produto removido)')}${it.isGift?' <span style="font-size:9px;padding:2px 6px;background:rgba(249,115,22,.15);color:var(--or);border-radius:4px">🎁 BRINDE</span>':''}</div>
+      <div style="font-size:10px;color:var(--txd);margin-top:2px">${p?`SKU ${esc(p.sku||'—')} · NCM ${esc(p.ncm||'—')} · CFOP ${esc(p.cfop||'5102')} · CSOSN ${esc(p.csosn||'102')}`:''}${p&&!p.ncm?' · <span style="color:var(--rd)">⚠️ Sem NCM</span>':''}</div></div>
+      <div style="text-align:center;font-size:12px;color:var(--txd)">× ${it.quantity||1}</div>
+      <div style="text-align:right;font-weight:600;font-size:13px;color:${it.incluir?'var(--or)':'var(--txd)'}">${fmtBRL(sub)}</div>
+    </div>`;
+  };
+  const lbl = t => `<div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600;margin-bottom:3px">${t}</div>`;
+  const statusSefaz = !sf ? '<span style="color:var(--txd)">⏳ verificando SEFAZ...</span>'
+    : sf.erro ? `<span style="color:var(--rd)">❌ ${esc(sf.erro)}</span>`
+    : sefazOk ? `<span style="color:#10b981">● SEFAZ-SP online</span> · série ${esc(String(sf.serie))} · ${homolog?'<strong style="color:var(--or)">HOMOLOGAÇÃO (teste, sem valor fiscal)</strong>':'<strong style="color:#10b981">PRODUÇÃO</strong>'}`
+    : `<span style="color:var(--rd)">⚠️ SEFAZ: ${esc(sf.motivo||'indisponível')}</span>`;
+
+  ov.innerHTML = `<div class="modal" style="width:720px;max-width:95vw;max-height:92vh;overflow-y:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="mt2" style="margin:0">🧾 Emitir NF-e — Emissor próprio</div>
+      <button onclick="nfeFecharModal()" ${s.enviando?'disabled':''} style="background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1">×</button>
+    </div>
+    <div style="font-size:11px;margin-bottom:12px">${statusSefaz}</div>
+
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd);display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>${lbl('👤 Destinatário')}<div style="font-weight:600;font-size:13px">${esc(o.clientName)}</div><div style="font-size:11px;color:var(--txd)">CPF/CNPJ: ${esc(o.cpfCnpj||'—')}</div></div>
+      <div>${lbl('📍 Endereço')}<div style="font-size:11px">${esc(o.street||'')}, ${esc(o.streetNum||'S/N')}${o.bairro?' · '+esc(o.bairro):''}</div><div style="font-size:11px;color:var(--txd)">${esc(o.city||'')} / ${esc((o.state||'SP').toUpperCase())} · CEP ${esc(o.cep||'')}</div></div>
+    </div>
+
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">📦 Itens da NF — clique pra marcar/desmarcar</div>
+      ${s.items.map(linha).join('')}
+    </div>
+
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd);display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="field"><label style="font-size:10px">Tipo de venda</label>
+        <select onchange="_nfeState.indPres=this.value">
+          <option value="2" ${s.indPres==='2'?'selected':''}>Internet / WhatsApp (não presencial)</option>
+          <option value="1" ${s.indPres==='1'?'selected':''}>Presencial (cliente na loja)</option>
+        </select></div>
+      <div class="field"><label style="font-size:10px">Pagamento</label>
+        <select onchange="_nfeState.pag={forma:this.value,label:this.options[this.selectedIndex].text}">
+          ${[['pix','PIX'],['dinheiro','Dinheiro'],['credito','Cartão de crédito'],['debito','Cartão de débito'],['outros','Outros']].map(([v,t])=>`<option value="${v}" ${s.pag.forma===v?'selected':''}>${t}</option>`).join('')}
+        </select></div>
+    </div>
+
+    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd);display:grid;grid-template-columns:repeat(3,1fr);gap:12px;text-align:center">
+      <div>${lbl('Produtos')}<div style="font-weight:700;font-size:16px;color:var(--txm)">${fmtBRL(c.bruto)}</div></div>
+      <div>${lbl('Desconto')}<div style="font-weight:700;font-size:16px;color:var(--txm)">${fmtBRL(c.desc)}</div></div>
+      <div>${lbl('Valor da NF')}<div style="font-weight:800;font-size:18px;color:var(--or)">${fmtBRL(c.total)}</div></div>
+    </div>
+
+    ${semNcm.length?`<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:11px;color:var(--rd)">⚠️ Produto sem NCM: ${esc(semNcm.join(', '))}. Preenche o NCM no cadastro do produto.</div>`:''}
+    ${s.erro?`<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:12px;color:var(--rd)"><strong>SEFAZ rejeitou:</strong> ${esc(s.erro)}<div style="font-size:10px;margin-top:4px;color:var(--txm)">Corrija o dado e clique em emitir de novo — número rejeitado é reaproveitado.</div></div>`:''}
+
+    <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--bd)">
+      <button class="btn bg2" onclick="nfeFecharModal()" ${s.enviando?'disabled':''} style="flex:1">Cancelar</button>
+      <button class="btn bp" ${bloqueado?'disabled style="flex:2;opacity:.4;cursor:not-allowed"':'style="flex:2"'} onclick="nfeConfirmarEmissao()">
+        ${s.enviando?'⏳ Enviando pra SEFAZ...':!c.itensNF.length?'Marque pelo menos 1 item':`✅ Emitir e autorizar — ${fmtBRL(c.total)}`}
+      </button>
+    </div>
+  </div>`;
+}
+
+async function nfeConfirmarEmissao(){
+  const s = _nfeState;
+  if(!s || s.enviando) return;
+  const o = s.order;
+  const c = nfeCalcular(s);
+  const homolog = s.sefaz && s.sefaz.ambiente === 2;
+  if(!homolog && !confirm(`Emitir NF-e REAL de ${fmtBRL(c.total)} para ${o.clientName}?\n\nDepois de autorizada, só dá pra cancelar em até 24h.`)) return;
+
+  const v = x => (x === undefined || x === null || String(x).trim() === '') ? undefined : String(x).trim();
+  const payload = {
+    pedido_id: String(o.orderNum || o.id),
+    ind_pres: s.indPres,
+    desconto: c.desc,
+    valor_frete: 0,
+    mod_frete: 9,
+    cliente: {
+      nome: o.clientName, cpf: (o.cpfCnpj||'').replace(/\D/g,''), email: v(o.email), fone: v((o.phone||'').replace(/\D/g,'')),
+      cep: (o.cep||'').replace(/\D/g,''), logradouro: v(o.street), numero: v(o.streetNum) || 'SN', complemento: v(o.complement),
+      bairro: v(o.bairro), municipio: v(o.city), uf: v((o.state||'').toUpperCase()),
+    },
+    itens: c.itensNF.map((it, i) => {
+      const p = it._p;
+      return {
+        codigo: p.sku || ('ITEM' + (i+1)), descricao: p.name, ncm: (p.ncm||'').replace(/\D/g,''),
+        gtin: (p.gtin||'').replace(/\D/g,'') || undefined, unidade: (p.unidMedida||'UN').toUpperCase().slice(0,6),
+        cfop: p.cfop || '5102', csosn: p.csosn || '102', origem: Number(p.origemICMS || 0),
+        quantidade: Number(it.quantity || 1), valor_unitario: Number(it.salePrice || 0),
+      };
+    }),
+    pagamentos: [{ forma: s.pag.forma, valor: c.total, descricao: s.pag.forma === 'outros' ? 'Outros' : undefined }],
+  };
+
+  s.enviando = true; s.erro = ''; nfeRenderModal();
+  try{
+    const r = await nfeCall('emitir', 'POST', payload);
+    nfeAplicarResultado(o.id, r);
+    if(r.status === 'autorizada'){
+      nfeFecharModal();
+      showToast(`✅ NF-e nº ${r.numero} autorizada!${r.ambiente==='homologacao'?' (homologação)':''}`,'gr');
+      if(confirm('NF-e autorizada! Abrir o DANFE agora?')) nfeAbrirDanfe(o.id);
+    } else if(r.status === 'pendente'){
+      nfeFecharModal();
+      showToast('⚠️ SEFAZ não respondeu. Use "Consultar SEFAZ" no pedido daqui a pouco.','or');
+    } else {
+      s.enviando = false; s.erro = `${r.cStat?'['+r.cStat+'] ':''}${r.motivo||r.status}`; nfeRenderModal();
+    }
+  }catch(e){
+    s.enviando = false; s.erro = e.message; nfeRenderModal();
+  }
+}
+
+// Atualiza pedido + aba Notas Fiscais com o retorno do emissor
+function nfeAplicarResultado(orderId, r){
+  const campos = {
+    nfeStatus: r.status, nfeNumero: r.numero, nfeSerie: r.serie, nfeChave: r.chave || '',
+    nfeProtocolo: r.protocolo || '', nfeMotivo: r.motivo || '', nfeAmbiente: r.ambiente, nfeValor: r.valor,
+  };
+  state.orders = state.orders.map(x => x.id === orderId ? { ...x, ...campos } : x);
+  save('orders');
+  const o = state.orders.find(x => x.id === orderId);
+  if(r.chave && (r.status === 'autorizada' || r.status === 'cancelada' || r.status === 'pendente' || r.status === 'denegada')){
+    const nfId = 'nfe-' + r.chave;
+    const stNF = { autorizada:'emitida', cancelada:'cancelada', pendente:'pendente', denegada:'denegada' }[r.status];
+    const reg = {
+      id: nfId, numero: String(r.numero), serie: String(r.serie), chave: r.chave,
+      dataEmissao: (r.emitida_em || new Date().toISOString()).slice(0,10),
+      clientName: o ? o.clientName : (r.cliente || ''), cpfCnpj: o ? o.cpfCnpj : '',
+      valor: String(r.valor ?? ''), status: stNF, orderId,
+      natureza: 'Venda de Mercadoria' + (r.ambiente === 'homologacao' ? ' (HOMOLOGAÇÃO)' : ''), emissorProprio: true,
+    };
+    const existe = state.nfs.some(n => n.id === nfId);
+    state.nfs = existe ? state.nfs.map(n => n.id === nfId ? { ...n, ...reg } : n) : [reg, ...state.nfs];
+    save('nfs');
+  }
+  if(typeof orderModalData !== 'undefined' && orderModalData && orderModalData.id === orderId){
+    Object.assign(orderModalData, campos);
+    showOrderModal();
+  } else { render(); }
+}
+
+function nfePedido(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.nfeChave){ showToast('❌ Pedido sem NF-e.','rd'); return null; }
+  return o;
+}
+
+async function nfeAbrirDanfe(orderId){
+  const o = nfePedido(orderId); if(!o) return;
+  const w = window.open('', '_blank');
+  try{
+    const r = await nfeCall('danfe/' + o.nfeChave, 'GET', null, true);
+    const url = URL.createObjectURL(await r.blob());
+    if(w) w.location.href = url; else window.open(url, '_blank');
+  }catch(e){ if(w) w.close(); showToast('❌ DANFE: ' + e.message,'rd'); }
+}
+
+async function nfeBaixarXml(orderId){
+  const o = nfePedido(orderId); if(!o) return;
+  try{
+    const r = await nfeCall('xml/' + o.nfeChave, 'GET', null, true);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url; a.download = `NFe_${o.nfeNumero}_${o.nfeChave}.xml`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }catch(e){ showToast('❌ XML: ' + e.message,'rd'); }
+}
+
+async function nfeConsultar(orderId){
+  const o = nfePedido(orderId); if(!o) return;
+  showToast('🔄 Consultando SEFAZ...','or');
+  try{
+    const r = await nfeCall('consultar/' + o.nfeChave, 'POST');
+    nfeAplicarResultado(o.id, r);
+    showToast(`SEFAZ: ${r.sefaz ? r.sefaz.motivo : r.status}`, r.status === 'autorizada' ? 'gr' : 'or');
+  }catch(e){ showToast('❌ ' + e.message,'rd'); }
+}
+
+async function nfeCancelar(orderId){
+  const o = nfePedido(orderId); if(!o) return;
+  const just = prompt(`Cancelar NF-e nº ${o.nfeNumero}?\n\nEscreva o motivo (mínimo 15 letras).\nEx: "Cliente desistiu da compra"`);
+  if(just === null) return;
+  if(just.trim().length < 15) return showToast('❌ Motivo precisa de pelo menos 15 caracteres.','rd');
+  if(!confirm(`Confirma o CANCELAMENTO da NF-e nº ${o.nfeNumero}? Não dá pra desfazer.`)) return;
+  try{
+    const r = await nfeCall('cancelar/' + o.nfeChave, 'POST', { justificativa: just.trim() });
+    if(r.ok){
+      nfeAplicarResultado(o.id, { status:'cancelada', numero:o.nfeNumero, serie:o.nfeSerie, chave:o.nfeChave, protocolo:o.nfeProtocolo, motivo:r.motivo, ambiente:o.nfeAmbiente, valor:o.nfeValor });
+      showToast('✅ NF-e cancelada.','gr');
+    } else showToast(`❌ SEFAZ: [${r.cStat}] ${r.motivo}`,'rd');
+  }catch(e){ showToast('❌ ' + e.message,'rd'); }
+}
+
+async function nfeCartaCorrecao(orderId){
+  const o = nfePedido(orderId); if(!o) return;
+  const txt = prompt('Carta de correção — o que precisa corrigir? (mínimo 15 letras)\n\nNÃO pode corrigir valores, impostos, CNPJ/CPF ou data.\nEx: "Numero do endereco correto e 120"');
+  if(txt === null) return;
+  if(txt.trim().length < 15) return showToast('❌ Correção precisa de pelo menos 15 caracteres.','rd');
+  try{
+    const r = await nfeCall('cce/' + o.nfeChave, 'POST', { correcao: txt.trim() });
+    showToast(r.ok ? `✅ Carta de correção nº ${r.sequencia} registrada.` : `❌ SEFAZ: [${r.cStat}] ${r.motivo}`, r.ok ? 'gr' : 'rd');
+  }catch(e){ showToast('❌ ' + e.message,'rd'); }
 }
 </script>
