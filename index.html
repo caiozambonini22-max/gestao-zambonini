@@ -5150,7 +5150,7 @@ async function syncProdToBling(){
 let _nfModalState = null;
 
 async function emitirNFPedido(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o) return showToast('❌ Pedido não encontrado.','rd');
 
   // === VALIDAÇÕES ===
@@ -5499,7 +5499,7 @@ async function fetchBlingNF(nfId){
 
 // Autoriza NF via SEFAZ (POST /nfe/{id}/enviar)
 async function autorizarNF(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
   if(!confirm(`Enviar NF #${o.blingNFNumero||o.blingNFId} pra SEFAZ e autorizar?\n\nESSA AÇÃO NÃO PODE SER DESFEITA.\nSe tiver erro fiscal, a NF é rejeitada mas o número continua queimado.`)) return;
   showToast('🏛️ Enviando pra SEFAZ...','or');
@@ -5539,7 +5539,7 @@ async function autorizarNF(orderId){
 
 // Baixa DANFE (PDF) — usa GET /nfe/{id} que já retorna link
 async function baixarDANFE(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
   showToast('📄 Buscando DANFE...','or');
   try{
@@ -5563,7 +5563,7 @@ async function baixarDANFE(orderId){
 }
 
 async function baixarXMLNF(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
   showToast('💾 Buscando XML...','or');
   try{
@@ -5606,7 +5606,7 @@ async function baixarXMLNF(orderId){
 
 // Visualiza NF no modal do ERP (dados vindos do Bling)
 async function visualizarNF(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.blingNFId) return showToast('❌ Pedido sem NF.','rd');
   showToast('👁️ Carregando NF...','or');
   try{
@@ -5728,7 +5728,7 @@ function sfChaveNFdoPedido(o){
 
 // ---------- Abrir ----------
 async function gerarEtiquetaSuperFrete(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o) return showToast('❌ Pedido não encontrado.','rd');
 
   const usaEntrega = o.diffDeliveryAddr && o.deliveryStreet;
@@ -6220,7 +6220,7 @@ function sfSalvarNoPedido(orderId, campos){
 
 // Pagar etiqueta que ficou no carrinho (pelo pedido)
 async function pagarEtiquetaPendenteSF(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.superfreteId) return;
   _sfModalState = { orderId: o.id, order: o, etapa: 'criada', dest: { nome: o.clientName||'', cidade: o.city||'', uf: o.state||'' },
     conteudo: [], fretes: [], docTipo: o.superfreteDoc || 'declaracao', comNF: (o.superfreteDoc||'declaracao') !== 'declaracao', chave: o.sfNFKey||'', nfNumero: o.sfNFNumero||'',
@@ -6230,7 +6230,7 @@ async function pagarEtiquetaPendenteSF(orderId){
 
 // Cancela etiqueta SuperFrete (só funciona se ainda não foi postada) — API exige "description"
 async function cancelarEtiquetaSuperFrete(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.superfreteId) return showToast('❌ Pedido sem etiqueta SuperFrete.','rd');
   const motivo = prompt('Motivo do cancelamento da etiqueta?', 'Pedido cancelado pelo cliente');
   if(!motivo) return;
@@ -6563,6 +6563,11 @@ function saveMaqModal(){
 // ============ EMISSOR NF-e PRÓPRIO (VPS → SEFAZ direto) ============
 // Proxy: /api/nfe-proxy (Vercel) → VPS srv2126279 → SEFAZ-SP
 // A chave do ERP fica só no navegador (localStorage), nunca no código (repo público).
+// Usa o pedido ABERTO na tela (com o que foi digitado e ainda não salvo); senão, o salvo
+function pedidoAtual(id){
+  if(typeof orderModalData !== 'undefined' && orderModalData && (orderModalData.id || '') === (id || '')) return orderModalData;
+  return state.orders.find(x => x.id === id) || null;
+}
 const NFE_PROXY = '/api/nfe-proxy';
 
 function nfeGetKey(forcar){
@@ -6638,7 +6643,7 @@ function nfeTipoPagamento(o){
 }
 
 async function abrirEmissorNFe(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o) return showToast('❌ Pedido não encontrado.','rd');
   const doc = (o.cpfCnpj||'').replace(/\D/g,'');
   if(!o.clientName) return showToast('❌ Pedido sem nome do cliente.','rd');
@@ -6847,7 +6852,7 @@ function nfeAplicarResultado(orderId, r){
 }
 
 function nfePedido(orderId){
-  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  const o = pedidoAtual(orderId);
   if(!o || !o.nfeChave){ showToast('❌ Pedido sem NF-e.','rd'); return null; }
   return o;
 }
