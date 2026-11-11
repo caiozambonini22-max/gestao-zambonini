@@ -1779,9 +1779,9 @@ function renderOrderModal(){
                 ${o.superfreteService?` · ${esc(o.superfreteService)}`:''}
                 ${o.superfretePrintUrl?`<div style="margin-top:4px"><a href="${esc(o.superfretePrintUrl)}" target="_blank" style="color:#10b981;text-decoration:underline">📄 Abrir etiqueta PDF</a></div>`:''}
               </div>`:''}
-              <div style="display:grid;grid-template-columns:${o.superfreteId?'1fr 1fr':'1fr'};gap:6px">
-                <button class="btn" style="justify-content:center;font-size:12px;padding:9px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.4);color:#10b981;font-weight:600" onclick="gerarEtiquetaSuperFrete('${o.id||''}')">${o.superfreteId?'🔄 Nova Etiqueta':'📮 Gerar Etiqueta SuperFrete'}</button>
-                ${o.superfreteId&&!o.superfreteStatus?`<button class="btn bd2" style="justify-content:center;font-size:11px;padding:9px" onclick="cancelarEtiquetaSuperFrete('${o.id||''}')">× Cancelar</button>`:''}
+              <div style="display:grid;grid-template-columns:${o.superfreteId&&o.superfreteStatus!=='canceled'&&o.superfreteStatus!=='cancelled'?'1fr 1fr':'1fr'};gap:6px">
+                ${o.superfreteId&&o.superfreteStatus==='pending'?`<button class="btn" style="justify-content:center;font-size:12px;padding:9px;background:rgba(249,115,22,.15);border:1px solid rgba(249,115,22,.5);color:var(--or);font-weight:600" onclick="pagarEtiquetaPendenteSF('${o.id||''}')">💰 Pagar etiqueta</button>`:`<button class="btn" style="justify-content:center;font-size:12px;padding:9px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.4);color:#10b981;font-weight:600" onclick="gerarEtiquetaSuperFrete('${o.id||''}')">${o.superfreteId&&o.superfreteStatus!=='canceled'?'🔄 Nova Etiqueta':'📮 Gerar Etiqueta SuperFrete'}</button>`}
+                ${o.superfreteId&&o.superfreteStatus!=='canceled'&&o.superfreteStatus!=='cancelled'?`<button class="btn bd2" style="justify-content:center;font-size:11px;padding:9px" onclick="cancelarEtiquetaSuperFrete('${o.id||''}')">× Cancelar etiqueta</button>`:''}
               </div>
             </div>
           </div>`:''}
@@ -5687,448 +5687,434 @@ function renderNfViewerModal(nf, o){
 }
 
 // ============ INTEGRAÇÃO SUPERFRETE ============
+// Fluxo: abre modal com TUDO editável (destinatário, embalagem, conteúdo, documento) →
+// cota → revisa → cria etiqueta (carrinho, sem cobrar) → você aprova o pagamento → PDF + rastreio.
 const SUPERFRETE_PROXY = '/api/superfrete-proxy';
-// Padrão de embalagem (do print do usuário na SuperFrete web)
 const SF_PADRAO = { height: 5, width: 12, length: 18, weight: 0.3 };
+const SF_MINI = { height: 4, width: 12, length: 18, weight: 0.3 }; // Mini Envios: altura máx 4cm
 const SF_CEP_ORIGEM = '14010080'; // Ribeirão Preto, SP
-// IDs dos serviços SuperFrete
-const SF_SERVICES = {
-  1: 'PAC', 2: 'SEDEX', 17: 'Mini Envios', 3: 'Jadlog', 33: 'J&T'
-};
-
-// Dados fixos do remetente (Zambonini Imports)
+const SF_SERVICES = { 1: 'PAC', 2: 'SEDEX', 17: 'Mini Envios', 3: 'Jadlog', 31: 'Loggi', 33: 'J&T' };
 const SF_REMETENTE = {
-  name: 'Zambonini Imports',
-  address: 'Rua Álvares Cabral',
-  complement: 'sala 707',
-  number: '464',
-  district: 'Centro',
-  city: 'Ribeirão Preto',
-  state_abbr: 'SP',
-  postal_code: '14010080',
-  document: '56413364000158' // CNPJ
+  name: 'Zambonini Imports', address: 'Rua Álvares Cabral', complement: 'sala 707', number: '464',
+  district: 'Centro', city: 'Ribeirão Preto', state_abbr: 'SP', postal_code: '14010080',
+  document: '56413364000158'
 };
 
-// Estado temporário do modal de SuperFrete
 let _sfModalState = null;
 
-// Abre o modal visual (bonito, estilo SuperFrete)
+async function sfApi(method, endpoint, body){
+  const r = await fetch(SUPERFRETE_PROXY, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method, endpoint, body })
+  });
+  const j = await r.json().catch(() => ({ ok: false, data: { message: 'Resposta inválida do proxy' } }));
+  return j;
+}
+
+function sfErro(j){
+  const d = (j && j.data) || {};
+  if(d.errors && typeof d.errors === 'object'){
+    return Object.entries(d.errors).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ');
+  }
+  return d.message || d.error || (j && j.error) || JSON.stringify(d).slice(0, 300);
+}
+
+function sfChaveNFdoPedido(o){
+  if(o.nfeStatus === 'autorizada' && o.nfeAmbiente === 'producao' && o.nfeChave) return { key: o.nfeChave, number: String(o.nfeNumero || '') };
+  if(o.sfNFKey) return { key: o.sfNFKey, number: o.sfNFNumero || '' };
+  if(o.blingNFKey) return { key: o.blingNFKey, number: String(o.blingNFNumero || '').split('/')[0] };
+  return null;
+}
+
+// ---------- Abrir ----------
 async function gerarEtiquetaSuperFrete(orderId){
   const o = state.orders.find(x => x.id === orderId) || orderModalData;
   if(!o) return showToast('❌ Pedido não encontrado.','rd');
 
-  // === VALIDAÇÕES ===
-  if(!o.clientName) return showToast('❌ Pedido sem nome do cliente.','rd');
-  if(!o.cpfCnpj) return showToast('❌ Cliente sem CPF/CNPJ. Preenche no pedido.','rd');
-  if(!o.street || !o.cep) return showToast('❌ Endereço incompleto (rua + CEP).','rd');
-  if(!o.city || !o.state) return showToast('❌ Pedido sem cidade/UF do cliente.','rd');
+  const usaEntrega = o.diffDeliveryAddr && o.deliveryStreet;
+  const items = (o.items && o.items.length) ? o.items : [{productId:o.productId, quantity:o.quantity, salePrice:o.salePrice}];
+  const conteudo = items.map(it => {
+    const p = state.prods.find(x => x.id === it.productId);
+    const v = Number(it.salePrice || 0);
+    return { nome: p ? p.name : 'Produto', qtd: Number(it.quantity || 1), valor: v > 0 ? v : 0.01 };
+  }).filter(c => c.qtd > 0);
 
-  // Endereço de entrega (prefere o diferente, se marcado)
-  const addr = o.diffDeliveryAddr && o.deliveryStreet ? {
-    street: o.deliveryStreet, streetNum: o.deliveryStreetNum, complement: o.deliveryComplement,
-    bairro: o.deliveryBairro, city: o.deliveryCity, state: o.deliveryState, cep: o.deliveryCep
-  } : {
-    street: o.street, streetNum: o.streetNum, complement: o.complement,
-    bairro: o.bairro, city: o.city, state: o.state, cep: o.cep
-  };
-
-  const cepDestino = (addr.cep||'').replace(/\D/g,'');
-  if(cepDestino.length !== 8) return showToast('❌ CEP de destino inválido.','rd');
-
-  // Inicializa state do modal
+  const nf = sfChaveNFdoPedido(o);
   _sfModalState = {
-    orderId: o.id,
-    order: o,
-    addr: addr,
-    cepDestino: cepDestino,
-    pacote: {...SF_PADRAO}, // Dimensões editáveis
-    fretes: [], // Resultado do calculator
-    carregando: true,
-    servicoSelecionado: null,
-    // Chave da NF: prefere a NF-e REAL do emissor próprio; homologação não serve pros Correios
-    usarNF: !!((o.nfeStatus==='autorizada' && o.nfeAmbiente==='producao' && o.nfeChave) || o.blingNFKey || o.blingNFNumero || o.blingNFId),
-    temChaveNF: !!((o.nfeStatus==='autorizada' && o.nfeAmbiente==='producao' && o.nfeChave) || o.blingNFKey),
-    chaveManual: (o.nfeStatus==='autorizada' && o.nfeAmbiente==='producao' && o.nfeChave) || o.blingNFKey || '' // Permite digitar/editar
+    orderId: o.id, order: o,
+    etapa: 'editar', // editar | revisar | criada | pronta
+    dest: {
+      nome: o.clientName || '', doc: (o.cpfCnpj || '').replace(/\D/g,''), fone: (o.phone || '').replace(/\D/g,''), email: o.email || '',
+      cep: ((usaEntrega ? o.deliveryCep : o.cep) || '').replace(/\D/g,''),
+      rua: (usaEntrega ? o.deliveryStreet : o.street) || '', numero: String((usaEntrega ? o.deliveryStreetNum : o.streetNum) || ''),
+      compl: (usaEntrega ? o.deliveryComplement : o.complement) || '', bairro: (usaEntrega ? o.deliveryBairro : o.bairro) || '',
+      cidade: (usaEntrega ? o.deliveryCity : o.city) || '', uf: ((usaEntrega ? o.deliveryState : o.state) || '').toUpperCase(),
+    },
+    pacote: { ...SF_PADRAO },
+    conteudo: conteudo.length ? conteudo : [{ nome: 'Smartwatch', qtd: 1, valor: 0.01 }],
+    docTipo: nf ? 'chave' : 'declaracao', // declaracao | chave | xml
+    chave: nf ? nf.key : '', nfNumero: nf ? nf.number : '', xmlNome: '',
+    danfeJunto: !!(o.nfeStatus === 'autorizada' && o.nfeAmbiente === 'producao'),
+    seguro: false,
+    fretes: [], carregando: false, erro: null, servicoSelecionado: null,
+    enviando: false, erroEnvio: null, sfId: null, sfPreco: null, printUrl: '', tracking: '',
   };
-
   renderSfModal();
+  if(!_sfModalState.dest.bairro || !_sfModalState.dest.cidade || !_sfModalState.dest.uf) await sfBuscarCep(true);
   await calcularFretesSF();
 }
 
-async function calcularFretesSF(){
-  if(!_sfModalState) return;
-  _sfModalState.carregando = true;
-  _sfModalState.servicoSelecionado = null;
-  renderSfModal();
-
-  try{
-    const res = await fetch(SUPERFRETE_PROXY, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        method: 'POST',
-        endpoint: '/calculator',
-        body: {
-          from: { postal_code: SF_CEP_ORIGEM },
-          to: { postal_code: _sfModalState.cepDestino },
-          services: '1,2,17,3,33', // PAC, SEDEX, Mini Envios, Jadlog, J&T
-          options: { own_hand: false, receipt: false, insurance_value: 0, use_insurance_value: false },
-          package: { ..._sfModalState.pacote }
-        }
-      })
-    });
-    const j = await res.json();
-    if(!j.ok){
-      const err = (j.data && (j.data.message || j.data.error)) || 'Erro ao calcular';
-      _sfModalState.erro = err;
-      _sfModalState.fretes = [];
-    } else {
-      const todos = Array.isArray(j.data) ? j.data : (j.data.data || []);
-      _sfModalState.fretes = todos;
-      _sfModalState.erro = null;
-    }
-  }catch(e){
-    _sfModalState.erro = e.message;
-    _sfModalState.fretes = [];
-  }
-  _sfModalState.carregando = false;
-  renderSfModal();
-}
-
 function fecharSfModal(){
+  const id = _sfModalState && _sfModalState.orderId;
   _sfModalState = null;
   const ov = document.getElementById('sf-modal-overlay');
   if(ov) ov.remove();
+  if(id && typeof orderModalData !== 'undefined' && orderModalData && orderModalData.id === id) showOrderModal(); else if(id) render();
 }
 
-function setSfPacote(campo, val){
-  if(!_sfModalState) return;
-  _sfModalState.pacote[campo] = Number(val) || 0;
-  // Re-render apenas inputs (sem recalcular até clicar botão)
+// ---------- Edição ----------
+function sfSet(grupo, campo, val){
+  const s = _sfModalState; if(!s) return;
+  if(grupo === 'dest') s.dest[campo] = val;
+  else if(grupo === 'pacote') { s.pacote[campo] = Number(String(val).replace(',','.')) || 0; s.fretes = []; s.servicoSelecionado = null; }
+  else s[campo] = val;
+}
+function sfSetConteudo(i, campo, val){
+  const s = _sfModalState; if(!s || !s.conteudo[i]) return;
+  s.conteudo[i][campo] = campo === 'nome' ? val : (Number(String(val).replace(',','.')) || 0);
+  sfAtualizarTotalConteudo();
+}
+function sfAtualizarTotalConteudo(){
+  const el = document.getElementById('sf-total-conteudo');
+  if(el && _sfModalState) el.textContent = fmtBRL(sfTotalConteudo());
+}
+function sfTotalConteudo(){
+  return (_sfModalState ? _sfModalState.conteudo : []).reduce((a, c) => a + Number(c.qtd || 0) * Number(c.valor || 0), 0);
+}
+function sfAddConteudo(){ _sfModalState.conteudo.push({ nome: '', qtd: 1, valor: 0.01 }); renderSfModal(); }
+function sfDelConteudo(i){ _sfModalState.conteudo.splice(i, 1); if(!_sfModalState.conteudo.length) sfAddConteudo(); else renderSfModal(); }
+function sfModoTroca(){
+  _sfModalState.conteudo = [{ nome: 'Smartwatch', qtd: 1, valor: 0.01 }];
+  _sfModalState.docTipo = 'declaracao';
   renderSfModal();
 }
+function sfPacote(preset){
+  _sfModalState.pacote = { ...(preset === 'mini' ? SF_MINI : SF_PADRAO) };
+  calcularFretesSF();
+}
+function sfDocTipo(t){ _sfModalState.docTipo = t; renderSfModal(); }
 
-function selSfServico(id){
-  if(!_sfModalState) return;
-  _sfModalState.servicoSelecionado = id;
-  renderSfModal();
+async function sfBuscarCep(silencioso){
+  const s = _sfModalState; if(!s) return;
+  const cep = (s.dest.cep || '').replace(/\D/g,'');
+  if(cep.length !== 8){ if(!silencioso) showToast('❌ CEP precisa ter 8 dígitos.','rd'); return; }
+  try{
+    const j = await fetch(`https://viacep.com.br/ws/${cep}/json/`).then(r => r.json());
+    if(j.erro){ if(!silencioso) showToast('❌ CEP não encontrado.','rd'); return; }
+    if(!s.dest.rua) s.dest.rua = j.logradouro || '';
+    if(!s.dest.bairro) s.dest.bairro = j.bairro || '';
+    s.dest.cidade = j.localidade || s.dest.cidade;
+    s.dest.uf = (j.uf || s.dest.uf || '').toUpperCase();
+    renderSfModal();
+    if(!silencioso) calcularFretesSF();
+  }catch(e){ if(!silencioso) showToast('❌ Falha ao buscar CEP.','rd'); }
 }
 
+function sfLerXml(input){
+  const f = input.files && input.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    const txt = String(rd.result || '');
+    const m = txt.match(/<chNFe>(\d{44})<\/chNFe>/) || txt.match(/Id="NFe(\d{44})"/);
+    const n = txt.match(/<nNF>(\d+)<\/nNF>/);
+    if(!m){ showToast('❌ Não achei a chave de acesso nesse XML.','rd'); return; }
+    _sfModalState.chave = m[1]; _sfModalState.nfNumero = n ? n[1] : ''; _sfModalState.xmlNome = f.name;
+    renderSfModal();
+    showToast('✅ Chave lida do XML.','gr');
+  };
+  rd.readAsText(f);
+}
+
+// ---------- Cotação ----------
+async function calcularFretesSF(){
+  const s = _sfModalState; if(!s) return;
+  const cep = (s.dest.cep || '').replace(/\D/g,'');
+  s.servicoSelecionado = null; s.erro = null;
+  if(cep.length !== 8){ s.fretes = []; s.erro = 'CEP do destinatário inválido'; renderSfModal(); return; }
+  s.carregando = true; renderSfModal();
+  const j = await sfApi('POST', '/calculator', {
+    from: { postal_code: SF_CEP_ORIGEM }, to: { postal_code: cep },
+    services: '1,2,17,3,31,33',
+    options: { own_hand: false, receipt: false, insurance_value: s.seguro ? sfTotalConteudo() : 0, use_insurance_value: !!s.seguro },
+    package: { ...s.pacote }
+  });
+  if(!_sfModalState) return;
+  if(!j.ok){ s.erro = sfErro(j); s.fretes = []; }
+  else { s.fretes = Array.isArray(j.data) ? j.data : (j.data.data || []); }
+  s.carregando = false;
+  renderSfModal();
+}
+function selSfServico(id){ _sfModalState.servicoSelecionado = id; renderSfModal(); }
+
+// ---------- Validação ----------
+function sfValidar(){
+  const s = _sfModalState, d = s.dest, e = [];
+  if(!d.nome.trim()) e.push('nome do destinatário');
+  const doc = d.doc.replace(/\D/g,''); if(doc.length !== 11 && doc.length !== 14) e.push('CPF/CNPJ (11 ou 14 dígitos)');
+  if(d.cep.replace(/\D/g,'').length !== 8) e.push('CEP');
+  if(!d.rua.trim()) e.push('rua');
+  if(!d.bairro.trim()) e.push('bairro');
+  if(!d.cidade.trim() || d.uf.trim().length !== 2) e.push('cidade/UF');
+  if(!s.conteudo.length || s.conteudo.some(c => !String(c.nome).trim() || c.qtd <= 0 || c.valor < 0.01)) e.push('conteúdo (nome, qtd ≥ 1, valor ≥ R$ 0,01)');
+  if((s.docTipo === 'chave' || s.docTipo === 'xml') && String(s.chave).replace(/\D/g,'').length !== 44) e.push('chave da NF (44 dígitos)');
+  if(!s.servicoSelecionado) e.push('escolher o frete');
+  return e;
+}
+
+// ---------- Render ----------
 function renderSfModal(){
   const s = _sfModalState;
   if(!s) return;
   let ov = document.getElementById('sf-modal-overlay');
   if(!ov){
     ov = document.createElement('div');
-    ov.id = 'sf-modal-overlay';
-    ov.className = 'overlay';
-    ov.style.zIndex = '10000';
-    ov.onclick = e => { if(e.target === ov) fecharSfModal(); };
+    ov.id = 'sf-modal-overlay'; ov.className = 'overlay'; ov.style.zIndex = '10000';
+    ov.onclick = e => { if(e.target === ov && !s.enviando) fecharSfModal(); };
     document.body.appendChild(ov);
   }
-  const o = s.order;
+  const box = (titulo, html, extra) => `<div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:12px;border:1px solid var(--bd)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px"><div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">${titulo}</div>${extra||''}</div>${html}</div>`;
+  const inp = (grupo, campo, val, label, extra) => `<div class="field" style="margin:0"><label style="font-size:9px">${label}</label><input value="${esc(String(val ?? ''))}" oninput="sfSet('${grupo}','${campo}',this.value)" ${extra||''} style="font-size:12px"></div>`;
+  const miniBtn = (txt, fn, ativo) => `<button onclick="${fn}" style="font-size:10px;padding:4px 8px;background:${ativo?'rgba(249,115,22,.15)':'var(--sf2)'};border:1px solid ${ativo?'var(--or)':'var(--bd)'};border-radius:5px;color:${ativo?'var(--or)':'var(--txm)'};cursor:pointer">${txt}</button>`;
+  const head = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="mt2" style="margin:0">📮 Etiqueta SuperFrete — Pedido #${esc(String(s.order.orderNum || ''))}</div>
+      <button onclick="fecharSfModal()" ${s.enviando?'disabled':''} style="background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1">×</button></div>`;
+  const d = s.dest;
+  const servicoSel = s.fretes.find(f => f.id === s.servicoSelecionado);
+  const docLabel = s.docTipo === 'declaracao' ? 'Declaração de conteúdo' : `Nota fiscal${s.nfNumero?' nº '+esc(s.nfNumero):''} (chave ${esc(String(s.chave).slice(0,8))}…)`;
+
+  // ===== ETAPA: criada (aguardando pagamento) / pronta =====
+  if(s.etapa === 'criada' || s.etapa === 'pronta'){
+    ov.innerHTML = `<div class="modal" style="width:620px;max-width:95vw;max-height:92vh;overflow-y:auto">${head}
+      ${s.etapa === 'criada' ? `
+        <div style="padding:14px;background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.4);border-radius:8px;margin-bottom:12px;font-size:13px">
+          📝 Etiqueta criada no carrinho da SuperFrete <strong>(ainda não cobrada)</strong>.<br>
+          <span style="font-size:12px;color:var(--txm)">${esc(servicoSel?servicoSel.name:'')} · ${esc(d.nome)} · ${esc(d.cidade)}/${esc(d.uf)} · ${docLabel}</span>
+          <div style="font-size:22px;font-weight:800;color:var(--or);margin-top:8px">${fmtBRL(Number(s.sfPreco || 0))}</div>
+        </div>
+        ${s.erroEnvio?`<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:12px;color:var(--rd)">❌ ${esc(s.erroEnvio)}</div>`:''}
+        <div style="display:flex;gap:8px">
+          <button class="btn bg2" style="flex:1" ${s.enviando?'disabled':''} onclick="fecharSfModal()">Deixar no carrinho</button>
+          <button class="btn bp" style="flex:2" ${s.enviando?'disabled':''} onclick="sfPagar()">${s.enviando?'⏳ Pagando...':`💰 Pagar com saldo SuperFrete e gerar PDF`}</button>
+        </div>
+        <div style="font-size:10px;color:var(--txd);margin-top:8px;text-align:center">Se deixar no carrinho, dá pra pagar depois no site da SuperFrete.</div>`
+      : `
+        <div style="padding:14px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.4);border-radius:8px;margin-bottom:12px;font-size:13px">
+          ✅ <strong>Etiqueta paga e pronta!</strong><br>
+          <span style="font-size:12px;color:var(--txm)">Rastreio: <span style="font-family:monospace">${esc(s.tracking || 'aguardando — aparece em alguns minutos')}</span></span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button class="btn bp" ${s.printUrl?'':'disabled'} onclick="window.open('${esc(s.printUrl)}','_blank')">📄 Abrir etiqueta${s.docTipo==='declaracao'?' + declaração':''}</button>
+          ${s.danfeJunto && s.order.nfeChave ? `<button class="btn bg2" onclick="nfeAbrirDanfe('${s.orderId}')">🧾 Abrir DANFE</button>` : `<button class="btn bg2" onclick="fecharSfModal()">Fechar</button>`}
+        </div>`}
+    </div>`;
+    return;
+  }
+
+  // ===== ETAPA: revisar =====
+  if(s.etapa === 'revisar'){
+    const linhas = s.conteudo.map(c => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span>${esc(String(c.qtd))}× ${esc(c.nome)}</span><span>${fmtBRL(c.qtd * c.valor)}</span></div>`).join('');
+    ov.innerHTML = `<div class="modal" style="width:620px;max-width:95vw;max-height:92vh;overflow-y:auto">${head}
+      <div style="font-size:12px;color:var(--txm);margin-bottom:10px">Confere tudo antes de criar. Ainda <strong>não</strong> é cobrado nada nesse passo.</div>
+      ${box('👤 Destinatário', `<div style="font-size:13px;font-weight:600">${esc(d.nome)} <span style="font-weight:400;color:var(--txd)">· ${esc(d.doc)}</span></div>
+        <div style="font-size:12px">${esc(d.rua)}, ${esc(d.numero || 'S/N')}${d.compl?' — '+esc(d.compl):''} · ${esc(d.bairro)}</div>
+        <div style="font-size:12px;color:var(--txd)">${esc(d.cidade)}/${esc(d.uf)} · CEP ${esc(d.cep)}${d.fone?' · '+esc(d.fone):''}</div>`)}
+      ${box('📦 Conteúdo · ' + docLabel, linhas + `<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;border-top:1px solid var(--bd);margin-top:6px;padding-top:6px"><span>Total declarado</span><span>${fmtBRL(sfTotalConteudo())}</span></div>`)}
+      ${box('🚚 Frete', `<div style="display:flex;justify-content:space-between;font-size:13px"><span>${esc(servicoSel?servicoSel.name:'')} · até ${esc(String(servicoSel&&servicoSel.delivery_time||'?'))} dias · ${s.pacote.height}×${s.pacote.width}×${s.pacote.length}cm ${s.pacote.weight}kg${s.seguro?' · com seguro':''}</span><strong style="color:var(--or)">${fmtBRL(Number(servicoSel?servicoSel.price:0))}</strong></div>`)}
+      ${s.erroEnvio?`<div style="padding:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:6px;margin-bottom:10px;font-size:12px;color:var(--rd)">❌ SuperFrete recusou: ${esc(s.erroEnvio)}</div>`:''}
+      <div style="display:flex;gap:8px">
+        <button class="btn bg2" style="flex:1" ${s.enviando?'disabled':''} onclick="_sfModalState.etapa='editar';_sfModalState.erroEnvio=null;renderSfModal()">← Voltar e editar</button>
+        <button class="btn bp" style="flex:2" ${s.enviando?'disabled':''} onclick="sfCriarEtiqueta()">${s.enviando?'⏳ Criando...':'✅ Criar etiqueta'}</button>
+      </div></div>`;
+    return;
+  }
+
+  // ===== ETAPA: editar =====
   const validos = s.fretes.filter(f => !f.error && f.price);
-  const melhorPreco = validos.length ? Math.min(...validos.map(f => Number(f.price))) : null;
-
-  const cardsHTML = s.carregando
-    ? `<div style="padding:40px;text-align:center;color:var(--txd);font-size:13px">
-         <div style="font-size:32px;margin-bottom:10px">⏳</div>
-         Calculando frete...
-       </div>`
-    : s.erro
-    ? `<div style="padding:20px;text-align:center;color:var(--rd);font-size:12px">
-         ❌ ${esc(s.erro)}
-       </div>`
-    : validos.length === 0
-    ? `<div style="padding:30px;text-align:center;color:var(--txd);font-size:13px">
-         <div style="font-size:28px;margin-bottom:8px">📭</div>
-         Nenhum frete disponível pra este CEP.
-       </div>`
+  const melhor = validos.length ? Math.min(...validos.map(f => Number(f.price))) : null;
+  const cards = s.carregando ? `<div style="padding:24px;text-align:center;color:var(--txd);font-size:13px">⏳ Calculando frete...</div>`
+    : s.erro ? `<div style="padding:14px;text-align:center;color:var(--rd);font-size:12px">❌ ${esc(s.erro)}</div>`
+    : !validos.length ? `<div style="padding:14px;text-align:center;color:var(--txd);font-size:12px">Clique em "Cotar frete".</div>`
     : validos.map(f => {
-        const sel = s.servicoSelecionado === f.id;
-        const ehMelhor = Number(f.price) === melhorPreco;
-        const servName = (f.name || '').toUpperCase();
-        const servIcon = /sedex/i.test(f.name) ? '🚀' : /mini/i.test(f.name) ? '📦' : /pac/i.test(f.name) ? '📬' : /jadlog/i.test(f.name) ? '🟣' : /j&t|jt/i.test(f.name) ? '🟡' : /loggi/i.test(f.name) ? '🔵' : '📮';
-        const borderColor = sel ? 'var(--or)' : (ehMelhor ? 'rgba(16,185,129,.4)' : 'var(--bd)');
-        const bg = sel ? 'rgba(249,115,22,.08)' : 'var(--sf3)';
-        return `<div onclick="selSfServico(${f.id})" style="cursor:pointer;padding:14px;border-radius:10px;border:2px solid ${borderColor};background:${bg};margin-bottom:8px;position:relative;transition:all .15s">
-          ${ehMelhor?`<span style="position:absolute;top:-9px;right:12px;background:#10b981;color:#fff;font-size:9px;font-weight:800;letter-spacing:1px;padding:3px 8px;border-radius:10px">✨ MELHOR PREÇO</span>`:''}
-          <div style="display:flex;align-items:center;gap:12px">
-            <div style="width:40px;height:40px;border-radius:50%;background:${sel?'var(--or)':'var(--sf2)'};display:flex;align-items:center;justify-content:center;border:2px solid ${sel?'var(--or)':'var(--bd)'}">
-              ${sel?'<div style="width:14px;height:14px;border-radius:50%;background:#fff"></div>':''}
-            </div>
-            <div style="flex:1">
-              <div style="font-weight:700;font-size:14px;color:var(--tx);display:flex;align-items:center;gap:6px">
-                <span style="font-size:18px">${servIcon}</span> ${esc(f.name)}
-              </div>
-              <div style="font-size:11px;color:var(--txd);margin-top:2px">Até ${f.delivery_time||'?'} dias úteis${f.company?.name?` · ${esc(f.company.name)}`:''}</div>
-            </div>
-            <div style="text-align:right">
-              <div style="font-weight:800;font-size:20px;color:${ehMelhor?'#10b981':'var(--or)'}">R$ ${Number(f.price).toFixed(2).replace('.',',')}</div>
-              ${f.discount && Number(f.discount)>0 ? `<div style="font-size:11px;color:var(--txd);text-decoration:line-through">R$ ${(Number(f.price)+Number(f.discount)).toFixed(2).replace('.',',')}</div>` : ''}
-            </div>
-          </div>
-        </div>`;
-      }).join('');
+      const sel = s.servicoSelecionado === f.id, top = Number(f.price) === melhor;
+      return `<div onclick="selSfServico(${f.id})" style="cursor:pointer;padding:10px 12px;border-radius:8px;border:2px solid ${sel?'var(--or)':(top?'rgba(16,185,129,.4)':'var(--bd)')};background:${sel?'rgba(249,115,22,.08)':'var(--sf2)'};margin-bottom:6px;display:flex;align-items:center;gap:10px">
+        <div style="width:18px;height:18px;border-radius:50%;border:2px solid ${sel?'var(--or)':'var(--bd)'};background:${sel?'var(--or)':'transparent'}"></div>
+        <div style="flex:1"><div style="font-weight:700;font-size:13px">${esc(f.name)}${top?' <span style="font-size:9px;background:#10b981;color:#fff;padding:2px 6px;border-radius:8px;margin-left:4px">MELHOR PREÇO</span>':''}</div>
+        <div style="font-size:11px;color:var(--txd)">Até ${esc(String(f.delivery_time||'?'))} dias úteis${f.company&&f.company.name?' · '+esc(f.company.name):''}</div></div>
+        <div style="font-weight:800;font-size:17px;color:${top?'#10b981':'var(--or)'}">${fmtBRL(Number(f.price))}</div></div>`;
+    }).join('');
+  const indisp = s.fretes.filter(f => f.error && !f.price).map(f => `${esc(f.name||'?')}: ${esc(typeof f.error==='string'?f.error:(f.error.message||JSON.stringify(f.error)).slice(0,90))}`).join(' · ');
+  const linhasConteudo = s.conteudo.map((c, i) => `<div style="display:grid;grid-template-columns:1fr 60px 90px 26px;gap:6px;margin-bottom:6px">
+      <input value="${esc(c.nome)}" placeholder="Ex: Smartwatch" oninput="sfSetConteudo(${i},'nome',this.value)" style="font-size:12px">
+      <input type="number" min="1" value="${c.qtd}" oninput="sfSetConteudo(${i},'qtd',this.value)" style="font-size:12px">
+      <input type="number" min="0.01" step="0.01" value="${c.valor}" oninput="sfSetConteudo(${i},'valor',this.value)" style="font-size:12px" title="Valor unitário (mín. R$ 0,01)">
+      <button onclick="sfDelConteudo(${i})" style="background:none;border:1px solid var(--bd);border-radius:5px;color:var(--rd);cursor:pointer">×</button></div>`).join('');
+  const docRadio = (v, txt) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 8px;border-radius:6px;border:1px solid ${s.docTipo===v?'var(--or)':'var(--bd)'};background:${s.docTipo===v?'rgba(249,115,22,.08)':'transparent'}"><input type="radio" name="sfdoc" ${s.docTipo===v?'checked':''} onchange="sfDocTipo('${v}')" style="width:auto">${txt}</label>`;
+  const chaveLen = String(s.chave||'').replace(/\D/g,'').length;
+  const erros = sfValidar();
 
-  // Erros exibidos pros serviços indisponíveis
-  const invalidosHTML = s.fretes.filter(f => f.error && !f.price).map(f =>
-    `<div style="font-size:10px;color:var(--txd);padding:6px 10px;background:var(--sf2);border-radius:5px;margin-bottom:4px;border-left:2px solid var(--txd)">
-      <strong>${esc(f.name||'?')}</strong>: ${esc(typeof f.error==='string'?f.error:JSON.stringify(f.error).slice(0,80))}
-    </div>`
-  ).join('');
+  ov.innerHTML = `<div class="modal" style="width:760px;max-width:96vw;max-height:94vh;overflow-y:auto">${head}
+    ${box('👤 Destinatário', `<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:8px">${inp('dest','nome',d.nome,'Nome completo')}${inp('dest','doc',d.doc,'CPF/CNPJ')}</div>
+      <div style="display:grid;grid-template-columns:110px 2fr 80px;gap:8px;margin-bottom:8px">
+        <div class="field" style="margin:0"><label style="font-size:9px">CEP</label><input value="${esc(d.cep)}" oninput="sfSet('dest','cep',this.value)" onblur="sfBuscarCep()" style="font-size:12px"></div>
+        ${inp('dest','rua',d.rua,'Rua')}${inp('dest','numero',d.numero,'Número')}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 60px;gap:8px;margin-bottom:8px">${inp('dest','compl',d.compl,'Complemento')}${inp('dest','bairro',d.bairro,'Bairro')}${inp('dest','cidade',d.cidade,'Cidade')}${inp('dest','uf',d.uf,'UF','maxlength="2"')}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${inp('dest','fone',d.fone,'Telefone')}${inp('dest','email',d.email,'E-mail (opcional)')}</div>`,
+      `<span style="font-size:10px;color:var(--txd)">Alterar aqui não muda o pedido</span>`)}
 
-  const btnEnviarEnabled = s.servicoSelecionado && !s.carregando;
-  const servicoSel = validos.find(f => f.id === s.servicoSelecionado);
+    ${box('📦 Conteúdo da encomenda', `<div style="display:grid;grid-template-columns:1fr 60px 90px 26px;gap:6px;font-size:9px;color:var(--txd);text-transform:uppercase;margin-bottom:4px"><span>Produto</span><span>Qtd</span><span>Valor un. (R$)</span><span></span></div>
+      ${linhasConteudo}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <button onclick="sfAddConteudo()" style="font-size:11px;padding:4px 8px;background:none;border:1px dashed var(--bd);border-radius:5px;color:var(--txm);cursor:pointer">+ Item</button>
+        <span style="font-size:12px">Total declarado: <strong id="sf-total-conteudo">${fmtBRL(sfTotalConteudo())}</strong></span></div>`,
+      miniBtn('🔁 Troca/garantia (R$ 0,01)', 'sfModoTroca()', false))}
 
-  ov.innerHTML = `<div class="modal" style="width:720px;max-width:95vw;max-height:92vh;overflow-y:auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-      <div class="mt2" style="margin:0">📮 Gerar Etiqueta — SuperFrete</div>
-      <button onclick="fecharSfModal()" style="background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1">×</button>
-    </div>
+    ${box('📋 Documento que vai junto', `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px">
+        ${docRadio('declaracao','📝 Declaração de conteúdo')}${docRadio('chave','🔑 NF — chave de acesso')}${docRadio('xml','📎 NF — arquivo XML')}</div>
+      ${s.docTipo === 'chave' ? `<div class="field" style="margin:0"><label style="font-size:9px">Chave de acesso (44 dígitos)${s.nfNumero?' · NF nº '+esc(s.nfNumero):''}</label>
+          <input value="${esc(s.chave)}" maxlength="54" oninput="_sfModalState.chave=this.value.replace(/\\D/g,'');document.getElementById('sf-chave-len').textContent=_sfModalState.chave.length+'/44'" style="font-family:monospace;font-size:11px">
+          <div id="sf-chave-len" style="font-size:10px;color:var(--txd);margin-top:2px">${chaveLen}/44</div></div>` : ''}
+      ${s.docTipo === 'xml' ? `<input type="file" accept=".xml,text/xml" onchange="sfLerXml(this)" style="font-size:11px">
+          ${s.xmlNome?`<div style="font-size:11px;color:#10b981;margin-top:4px">✅ ${esc(s.xmlNome)} · NF nº ${esc(s.nfNumero||'?')} · chave ${esc(s.chave)}</div>`:''}` : ''}
+      ${s.docTipo !== 'declaracao' && s.order.nfeChave ? `<label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:8px;cursor:pointer"><input type="checkbox" ${s.danfeJunto?'checked':''} onchange="_sfModalState.danfeJunto=this.checked" style="width:auto"> Abrir o DANFE pra imprimir junto com a etiqueta</label>` : ''}
+      ${s.docTipo === 'declaracao' ? `<div style="font-size:10px;color:var(--txd)">A declaração sai no PDF junto com a etiqueta, com os itens e valores acima.</div>` : ''}`)}
 
-    <!-- Rota -->
-    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
-      <div>
-        <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600;margin-bottom:3px">🟢 Origem</div>
-        <div style="font-size:12px;font-weight:600">Ribeirão Preto, SP</div>
-        <div style="font-size:11px;color:var(--txd)">CEP ${SF_CEP_ORIGEM.replace(/(\d{5})(\d{3})/,'$1-$2')}</div>
-      </div>
-      <div style="color:var(--or);font-size:20px">→</div>
-      <div style="text-align:right">
-        <div style="font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--txd);font-weight:600;margin-bottom:3px">🔴 Destino</div>
-        <div style="font-size:12px;font-weight:600">${esc(s.addr.city||'')}, ${esc((s.addr.state||'').toUpperCase())}</div>
-        <div style="font-size:11px;color:var(--txd)">CEP ${s.cepDestino.replace(/(\d{5})(\d{3})/,'$1-$2')}</div>
-      </div>
-    </div>
+    ${box('📐 Embalagem', `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${inp('pacote','height',s.pacote.height,'Altura (cm)','type="number" step="0.1"')}${inp('pacote','width',s.pacote.width,'Largura (cm)','type="number" step="0.1"')}${inp('pacote','length',s.pacote.length,'Comp. (cm)','type="number" step="0.1"')}${inp('pacote','weight',s.pacote.weight,'Peso (kg)','type="number" step="0.01"')}</div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-top:8px;cursor:pointer"><input type="checkbox" ${s.seguro?'checked':''} onchange="_sfModalState.seguro=this.checked;calcularFretesSF()" style="width:auto"> Seguro: declarar o valor do conteúdo (frete fica mais caro)</label>`,
+      `<div style="display:flex;gap:4px">${miniBtn('Padrão 5×12×18','sfPacote(\'padrao\')',s.pacote.height===5&&s.pacote.width===12&&s.pacote.length===18)}${miniBtn('Mini Envios 4cm','sfPacote(\'mini\')',s.pacote.height===4)}</div>`)}
 
-    <!-- Embalagem -->
-    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.5px;text-transform:uppercase">📦 Embalagem</div>
-        <button onclick="_sfModalState.pacote={..._sfModalState.pacote,height:5,width:12,length:18,weight:0.3};renderSfModal()" style="background:none;border:1px solid var(--bd);color:var(--txd);font-size:10px;padding:4px 8px;border-radius:5px;cursor:pointer">↺ Padrão</button>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
-        <div class="field"><label style="font-size:9px">Altura (cm)</label><input type="number" step="0.1" value="${s.pacote.height}" oninput="setSfPacote('height',this.value)" style="font-size:12px"></div>
-        <div class="field"><label style="font-size:9px">Largura (cm)</label><input type="number" step="0.1" value="${s.pacote.width}" oninput="setSfPacote('width',this.value)" style="font-size:12px"></div>
-        <div class="field"><label style="font-size:9px">Comp. (cm)</label><input type="number" step="0.1" value="${s.pacote.length}" oninput="setSfPacote('length',this.value)" style="font-size:12px"></div>
-        <div class="field"><label style="font-size:9px">Peso (kg)</label><input type="number" step="0.01" value="${s.pacote.weight}" oninput="setSfPacote('weight',this.value)" style="font-size:12px"></div>
-      </div>
-      <button onclick="calcularFretesSF()" style="width:100%;margin-top:8px;padding:8px;background:var(--sf2);border:1px solid var(--bd);border-radius:6px;color:var(--or);font-size:11px;font-weight:600;cursor:pointer">🔄 Recalcular com estas dimensões</button>
-    </div>
+    ${box('🚚 Frete', cards + (indisp?`<div style="font-size:10px;color:var(--txd);margin-top:4px">Indisponíveis: ${indisp}</div>`:''),
+      `<button onclick="calcularFretesSF()" style="font-size:11px;padding:4px 10px;background:var(--sf2);border:1px solid var(--bd);border-radius:5px;color:var(--or);cursor:pointer;font-weight:600">🔄 Cotar frete</button>`)}
 
-    <!-- Opções -->
-    <div style="padding:12px;background:var(--sf3);border-radius:8px;margin-bottom:14px;border:1px solid var(--bd)">
-      <div style="font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">📋 Documento fiscal</div>
-      <div style="margin-bottom:8px">
-        ${s.chaveManual && s.chaveManual.length === 44
-          ? `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gr)"><span style="font-size:14px">✅</span> Vai anexar <strong>Nota Fiscal</strong> (chave abaixo)</div>`
-          : `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--txm)"><span style="font-size:14px">📝</span> Sem chave — vai usar <strong>Declaração de Conteúdo</strong></div>`
-        }
-      </div>
-      <div class="field" style="margin:0"><label style="font-size:10px">Chave de Acesso da NF-e (44 dígitos) — opcional</label>
-        <input value="${esc(s.chaveManual||'')}" oninput="_sfModalState.chaveManual=this.value.replace(/\\D/g,'');renderSfModal()" placeholder="Cola aqui a chave se tiver NF autorizada" maxlength="44" style="font-family:monospace;font-size:11px">
-      </div>
-      ${s.chaveManual && s.chaveManual.length > 0 && s.chaveManual.length < 44 ? `<div style="font-size:10px;color:var(--or);margin-top:4px">⚠️ Chave tem ${s.chaveManual.length}/44 dígitos</div>`:''}
-    </div>
-
-    <!-- Serviços -->
-    <div style="margin-bottom:14px">
-      <div style="font-size:11px;font-weight:700;color:var(--tx);letter-spacing:.5px;text-transform:uppercase;margin-bottom:10px">🚚 Escolha a modalidade</div>
-      ${cardsHTML}
-      ${invalidosHTML ? `<div style="margin-top:8px"><div style="font-size:9px;color:var(--txd);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Indisponíveis</div>${invalidosHTML}</div>` : ''}
-    </div>
-
-    <!-- Rodapé -->
-    <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--bd)">
-      <button class="btn bg2" onclick="fecharSfModal()" style="flex:1">Cancelar</button>
-      <button class="btn bp" ${btnEnviarEnabled?'':'disabled style="opacity:.4;cursor:not-allowed"'} onclick="confirmarEnvioSuperFrete()" style="flex:2">
-        ${servicoSel ? `✅ Gerar etiqueta ${esc(servicoSel.name)} — R$ ${Number(servicoSel.price).toFixed(2).replace('.',',')}` : 'Selecione um serviço'}
-      </button>
+    ${erros.length && s.servicoSelecionado ? `<div style="font-size:11px;color:var(--rd);margin-bottom:8px">Falta: ${esc(erros.join(', '))}</div>` : ''}
+    <div style="display:flex;gap:8px;padding-top:10px;border-top:1px solid var(--bd)">
+      <button class="btn bg2" style="flex:1" onclick="fecharSfModal()">Cancelar</button>
+      <button class="btn bp" style="flex:2" onclick="sfIrRevisar()">${servicoSel?`Revisar → ${esc(servicoSel.name)} ${fmtBRL(Number(servicoSel.price))}`:'Escolha um frete'}</button>
     </div>
   </div>`;
 }
 
-// Chamado quando clica "Gerar etiqueta"
-async function confirmarEnvioSuperFrete(){
-  const s = _sfModalState;
-  if(!s || !s.servicoSelecionado) return showToast('❌ Selecione um serviço primeiro.','rd');
-  const servico = s.fretes.find(f => f.id === s.servicoSelecionado);
-  if(!servico) return showToast('❌ Serviço inválido.','rd');
+function sfIrRevisar(){
+  const e = sfValidar();
+  if(e.length){ renderSfModal(); return showToast('❌ Falta: ' + e.join(', '),'rd'); }
+  _sfModalState.etapa = 'revisar'; _sfModalState.erroEnvio = null; renderSfModal();
+}
 
-  const o = s.order;
-  const addr = s.addr;
-  const cepDestino = s.cepDestino;
-
-  // Define invoice (NF) ou declaração — usa chave manual se tiver
-  let invoiceData = null;
-  if(s.chaveManual && s.chaveManual.length === 44){
-    invoiceData = { key: s.chaveManual };
-    // Salva no pedido pra próximas vezes
-    state.orders = state.orders.map(ord => ord.id === o.id ? { ...ord, blingNFKey: s.chaveManual } : ord);
-    save('orders');
-  }
-
-  // Fecha modal
-  fecharSfModal();
-  showToast('📮 Criando etiqueta no SuperFrete...','or');
-
-  // === CRIA ENVIO (/cart) ===
-  const soCpf = (o.cpfCnpj||'').replace(/\D/g,'');
-  const telefone = (o.phone||'').replace(/\D/g,'');
-  const items = (o.items && o.items.length) ? o.items : [{productId:o.productId, quantity:o.quantity, salePrice:o.salePrice}];
-  const productsList = items.map(it => {
-    const p = state.prods.find(x => x.id === it.productId);
-    return {
-      name: p ? p.name : 'Produto',
-      quantity: Number(it.quantity||1),
-      unitary_value: Number(it.salePrice||0)
-    };
-  }).filter(p => p.name && p.quantity > 0);
-
-  const cartBody = {
+// ---------- Criar (carrinho, sem cobrar) ----------
+async function sfCriarEtiqueta(){
+  const s = _sfModalState; if(!s || s.enviando) return;
+  const d = s.dest, o = s.order;
+  const comNF = s.docTipo === 'chave' || s.docTipo === 'xml';
+  const chave = String(s.chave).replace(/\D/g,'');
+  const body = {
     from: SF_REMETENTE,
     to: {
-      name: o.clientName,
-      address: addr.street || '',
-      complement: addr.complement || '',
-      number: String(addr.streetNum || ''),
-      district: addr.bairro || 'NA',
-      city: addr.city || '',
-      state_abbr: (addr.state||'SP').toUpperCase(),
-      postal_code: cepDestino,
-      email: o.email || '',
-      phone: telefone,
-      document: soCpf
+      name: d.nome.trim(), address: d.rua.trim(), complement: d.compl.trim(), number: d.numero.trim() || 'S/N',
+      district: d.bairro.trim(), city: d.cidade.trim(), state_abbr: d.uf.trim().toUpperCase(),
+      postal_code: d.cep.replace(/\D/g,''), email: d.email.trim(), phone: d.fone.replace(/\D/g,''), document: d.doc.replace(/\D/g,'')
     },
-    service: servico.id,
-    products: productsList,
+    service: s.servicoSelecionado,
+    products: s.conteudo.map(c => ({ name: String(c.nome).trim(), quantity: Number(c.qtd), unitary_value: Math.max(0.01, Math.round(Number(c.valor) * 100) / 100) })),
     volumes: { ...s.pacote },
     options: {
-      insurance_value: null,
-      receipt: false,
-      own_hand: false,
-      non_commercial: !invoiceData,
-      ...(invoiceData ? { invoice: invoiceData } : {}),
-      tag: o.id || '',
-      url: 'https://gestao-zambonini.vercel.app',
-      platform: 'Gestao Zambonini ERP'
+      insurance_value: s.seguro ? Math.round(sfTotalConteudo() * 100) / 100 : null,
+      receipt: false, own_hand: false,
+      non_commercial: !comNF,
+      ...(comNF ? { invoice: { number: String(s.nfNumero || chave.slice(25, 34).replace(/^0+/, '')), key: chave } } : {}),
+      tag: String(o.orderNum || o.id || ''),
     },
     platform: 'Gestao Zambonini ERP'
   };
-
-  const cartRes = await fetch(SUPERFRETE_PROXY, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ method:'POST', endpoint:'/cart', body: cartBody })
+  s.enviando = true; s.erroEnvio = null; renderSfModal();
+  const j = await sfApi('POST', '/cart', body);
+  if(!_sfModalState) return;
+  s.enviando = false;
+  if(!j.ok){ s.erroEnvio = sfErro(j); renderSfModal(); return; }
+  const sf = (j.data && j.data.data) || j.data || {};
+  if(!sf.id){ s.erroEnvio = 'SuperFrete não devolveu o ID da etiqueta'; renderSfModal(); return; }
+  const servico = s.fretes.find(f => f.id === s.servicoSelecionado) || {};
+  s.sfId = sf.id; s.sfPreco = sf.price || servico.price; s.etapa = 'criada';
+  sfSalvarNoPedido(o.id, {
+    superfreteId: sf.id, superfreteStatus: 'pending', superfreteService: servico.name || SF_SERVICES[s.servicoSelecionado] || '',
+    superfretePrice: s.sfPreco, superfreteTracking: '', superfretePrintUrl: '',
+    superfreteDoc: s.docTipo, ...(comNF ? { sfNFKey: chave, sfNFNumero: s.nfNumero || '' } : {})
   });
-  const cartJson = await cartRes.json();
-  if(!cartJson.ok){
-    const err = (cartJson.data && (cartJson.data.message || cartJson.data.error)) || JSON.stringify(cartJson.data).slice(0,300);
-    console.error('[superfrete cart]', cartJson);
-    return showToast(`❌ Erro ao criar etiqueta: ${err}`,'rd');
-  }
-  const sfOrder = cartJson.data.data || cartJson.data;
-  const sfOrderId = sfOrder.id;
-  if(!sfOrderId) return showToast('❌ Etiqueta criada mas sem ID retornado.','rd');
-
-  // Salva no pedido (pending)
-  state.orders = state.orders.map(ord => ord.id === o.id ? {
-    ...ord, superfreteId: sfOrderId, superfreteStatus: 'pending',
-    superfreteService: servico.name, superfretePrice: servico.price
-  } : ord);
-  save('orders');
-
-  // Confirma pagamento
-  if(!confirm(`✅ Etiqueta criada!\n\nServiço: ${servico.name}\nPreço: R$ ${Number(servico.price).toFixed(2)}\n\nFinalizar pagamento agora com saldo da carteira SuperFrete?\n\n(Se cancelar, fica em pending — pode pagar depois.)`)){
-    showToast('✅ Etiqueta criada em modo pending.','or');
-    if(orderModalData && orderModalData.id === o.id){
-      Object.assign(orderModalData, {superfreteId: sfOrderId, superfreteStatus:'pending', superfreteService: servico.name});
-      showOrderModal();
-    } else render();
-    return;
-  }
-
-  // Paga
-  showToast('💰 Finalizando pagamento...','or');
-  const payRes = await fetch(SUPERFRETE_PROXY, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ method:'POST', endpoint:'/checkout', body: { orders: [sfOrderId] } })
-  });
-  const payJson = await payRes.json();
-  if(!payJson.ok){
-    const err = (payJson.data && (payJson.data.message || payJson.data.error)) || JSON.stringify(payJson.data).slice(0,300);
-    return showToast(`❌ Erro no pagamento: ${err}`,'rd');
-  }
-
-  // Baixa PDF
-  showToast('📄 Gerando PDF...','or');
-  const printRes = await fetch(SUPERFRETE_PROXY, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ method:'POST', endpoint:'/tag/print', body: { orders: [sfOrderId] } })
-  });
-  const printJson = await printRes.json();
-  let printUrl = '';
-  if(printJson.ok){
-    const d = printJson.data.data || printJson.data;
-    printUrl = d.url || d.link || '';
-  }
-
-  // Busca rastreio
-  const trackRes = await fetch(SUPERFRETE_PROXY, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ method:'GET', endpoint:`/order/info/${sfOrderId}` })
-  });
-  const trackJson = await trackRes.json();
-  let tracking = '';
-  if(trackJson.ok){
-    const d = trackJson.data.data || trackJson.data;
-    tracking = d.tracking || '';
-  }
-
-  state.orders = state.orders.map(ord => ord.id === o.id ? {
-    ...ord, superfreteStatus: 'released', superfreteTracking: tracking, superfretePrintUrl: printUrl
-  } : ord);
-  save('orders');
-  if(orderModalData && orderModalData.id === o.id){
-    Object.assign(orderModalData, {superfreteStatus:'released', superfreteTracking: tracking, superfretePrintUrl: printUrl});
-    showOrderModal();
-  } else render();
-
-  showToast(`✅ Etiqueta pronta! Rastreio: ${tracking || 'aguardando'}`,'gr');
-  if(printUrl && confirm('Etiqueta gerada! Abrir PDF agora pra imprimir?')) window.open(printUrl, '_blank');
+  renderSfModal();
 }
 
-// Cancela etiqueta SuperFrete (só funciona se ainda não foi postada)
+// ---------- Pagar (só com sua aprovação) ----------
+async function sfPagar(){
+  const s = _sfModalState; if(!s || !s.sfId || s.enviando) return;
+  if(!confirm(`Pagar ${fmtBRL(Number(s.sfPreco || 0))} com o saldo da carteira SuperFrete?`)) return;
+  s.enviando = true; s.erroEnvio = null; renderSfModal();
+  const pay = await sfApi('POST', '/checkout', { orders: [s.sfId] });
+  if(!_sfModalState) return;
+  if(!pay.ok){ s.enviando = false; s.erroEnvio = 'Pagamento: ' + sfErro(pay) + ' (confira o saldo da carteira SuperFrete)'; renderSfModal(); return; }
+  await sfAtualizarInfo();
+}
+
+async function sfAtualizarInfo(){
+  const s = _sfModalState; if(!s) return;
+  let info = null;
+  for(let i = 0; i < 4; i++){
+    const r = await sfApi('GET', `/order/info/${s.sfId}`);
+    if(r.ok){ info = (r.data && r.data.data) || r.data; if(info && info.print && info.print.url && info.status !== 'pending') break; }
+    await new Promise(res => setTimeout(res, 1500));
+  }
+  if(!_sfModalState) return;
+  let printUrl = info && info.print && info.print.url || '';
+  if(!printUrl){
+    const pr = await sfApi('POST', '/tag/print', { orders: [s.sfId] });
+    if(pr.ok){ const dd = (pr.data && pr.data.data) || pr.data || {}; printUrl = dd.url || dd.link || ''; }
+  }
+  s.printUrl = printUrl; s.tracking = (info && info.tracking) || '';
+  s.enviando = false; s.etapa = 'pronta';
+  sfSalvarNoPedido(s.orderId, { superfreteStatus: (info && info.status) || 'released', superfreteTracking: s.tracking, superfretePrintUrl: printUrl });
+  renderSfModal();
+  if(printUrl) window.open(printUrl, '_blank');
+  if(s.danfeJunto && s.order.nfeChave && s.docTipo !== 'declaracao') setTimeout(() => nfeAbrirDanfe(s.orderId), 600);
+}
+
+function sfSalvarNoPedido(orderId, campos){
+  state.orders = state.orders.map(ord => ord.id === orderId ? { ...ord, ...campos } : ord);
+  save('orders');
+  if(typeof orderModalData !== 'undefined' && orderModalData && orderModalData.id === orderId) Object.assign(orderModalData, campos);
+}
+
+// Pagar etiqueta que ficou no carrinho (pelo pedido)
+async function pagarEtiquetaPendenteSF(orderId){
+  const o = state.orders.find(x => x.id === orderId) || orderModalData;
+  if(!o || !o.superfreteId) return;
+  _sfModalState = { orderId: o.id, order: o, etapa: 'criada', dest: { nome: o.clientName||'', cidade: o.city||'', uf: o.state||'' },
+    conteudo: [], fretes: [], docTipo: o.superfreteDoc || 'declaracao', chave: o.sfNFKey||'', nfNumero: o.sfNFNumero||'',
+    danfeJunto: false, sfId: o.superfreteId, sfPreco: o.superfretePrice, servicoSelecionado: null, pacote: {...SF_PADRAO} };
+  renderSfModal();
+}
+
+// Cancela etiqueta SuperFrete (só funciona se ainda não foi postada) — API exige "description"
 async function cancelarEtiquetaSuperFrete(orderId){
   const o = state.orders.find(x => x.id === orderId) || orderModalData;
   if(!o || !o.superfreteId) return showToast('❌ Pedido sem etiqueta SuperFrete.','rd');
-  const motivo = prompt(`Motivo do cancelamento da etiqueta?`, 'Pedido cancelado pelo cliente');
+  const motivo = prompt('Motivo do cancelamento da etiqueta?', 'Pedido cancelado pelo cliente');
   if(!motivo) return;
   showToast('× Cancelando etiqueta...','or');
-  const r = await fetch(SUPERFRETE_PROXY, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({
-      method:'POST',
-      endpoint:'/order/cancel',
-      body: { order: { id: o.superfreteId, reason: motivo } }
-    })
-  });
-  const j = await r.json();
+  const j = await sfApi('POST', '/order/cancel', { order: { id: o.superfreteId, description: motivo } });
   if(j.ok){
-    state.orders = state.orders.map(ord => ord.id === o.id ? {
-      ...ord, superfreteStatus: 'cancelled'
-    } : ord);
-    save('orders');
-    if(orderModalData && orderModalData.id === o.id){
-      orderModalData.superfreteStatus = 'cancelled';
-      showOrderModal();
-    } else render();
-    showToast('✅ Etiqueta cancelada e saldo estornado.','gr');
+    sfSalvarNoPedido(o.id, { superfreteStatus: 'canceled' });
+    if(typeof orderModalData !== 'undefined' && orderModalData && orderModalData.id === o.id) showOrderModal(); else render();
+    showToast('✅ Etiqueta cancelada (se já estava paga, o valor volta pra carteira SuperFrete).','gr');
   } else {
-    const err = (j.data && (j.data.message || j.data.error)) || JSON.stringify(j.data).slice(0,200);
-    showToast(`❌ Erro ao cancelar: ${err}`,'rd');
+    showToast(`❌ Erro ao cancelar: ${sfErro(j)}`,'rd');
   }
 }
 
