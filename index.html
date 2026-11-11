@@ -5745,9 +5745,10 @@ async function gerarEtiquetaSuperFrete(orderId){
     fretes: [], // Resultado do calculator
     carregando: true,
     servicoSelecionado: null,
-    usarNF: !!(o.blingNFKey || o.blingNFNumero || o.blingNFId),
-    temChaveNF: !!o.blingNFKey,
-    chaveManual: o.blingNFKey || '' // Permite digitar/editar
+    // Chave da NF: prefere a NF-e REAL do emissor próprio; homologação não serve pros Correios
+    usarNF: !!((o.nfeStatus==='autorizada' && o.nfeAmbiente==='producao' && o.nfeChave) || o.blingNFKey || o.blingNFNumero || o.blingNFId),
+    temChaveNF: !!((o.nfeStatus==='autorizada' && o.nfeAmbiente==='producao' && o.nfeChave) || o.blingNFKey),
+    chaveManual: (o.nfeStatus==='autorizada' && o.nfeAmbiente==='producao' && o.nfeChave) || o.blingNFKey || '' // Permite digitar/editar
   };
 
   renderSfModal();
