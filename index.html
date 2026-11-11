@@ -6501,6 +6501,7 @@ function nfeBlocoPedido(o){
     acoes = `<button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:10px;background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);color:#10b981;font-weight:700" onclick="abrirEmissorNFe('${id}')">${st?'🔄 Emitir NF-e de novo':'🧾 Emitir NF-e (emissor próprio)'}</button>`;
   } else if(st === 'autorizada'){
     acoes = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${btn('📄 DANFE','nfeAbrirDanfe')}${btn('💾 XML','nfeBaixarXml')}${btn('✏️ Carta de correção','nfeCartaCorrecao')}${btn('🚫 Cancelar NF','nfeCancelar')}</div>`;
+    if(homolog) acoes += `<button class="btn" style="justify-content:center;width:100%;margin-top:6px;font-size:12px;padding:10px;background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);color:#10b981;font-weight:700" onclick="abrirEmissorNFe('${id}')">🧾 Emitir NF-e REAL (produção)</button>`;
   } else if(st === 'pendente'){
     acoes = btn('🔄 Consultar SEFAZ','nfeConsultar') ;
   }
