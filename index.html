@@ -6620,7 +6620,7 @@ function nfeBlocoPedido(o){
     acoes = `<button class="btn" style="justify-content:center;width:100%;font-size:12px;padding:10px;background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);color:#10b981;font-weight:700" onclick="abrirEmissorNFe('${id}')">${st?'🔄 Emitir NF-e de novo':'🧾 Emitir NF-e (emissor próprio)'}</button>`;
   } else if(st === 'autorizada'){
     acoes = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">${btn('📄 DANFE','nfeAbrirDanfe')}${btn('💾 XML','nfeBaixarXml')}${btn('✏️ Carta de correção','nfeCartaCorrecao')}${btn('🚫 Cancelar NF','nfeCancelar')}</div>`;
-    if(homolog) acoes += `<button class="btn" style="justify-content:center;width:100%;margin-top:6px;font-size:12px;padding:10px;background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);color:#10b981;font-weight:700" onclick="abrirEmissorNFe('${id}')">🧾 Emitir NF-e REAL (produção)</button>`;
+    if(homolog) acoes += `<button class="btn" style="justify-content:center;width:100%;margin-top:6px;font-size:12px;padding:10px;background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);color:#10b981;font-weight:700" onclick="abrirEmissorNFe('${id}')">✅ Autorizar na SEFAZ (nota valendo)</button>`;
   } else if(st === 'pendente'){
     acoes = btn('🔄 Consultar SEFAZ','nfeConsultar') ;
   }
@@ -6764,24 +6764,27 @@ function nfeRenderModal(){
 
     <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--bd)">
       <button class="btn bg2" onclick="nfeFecharModal()" ${s.enviando?'disabled':''} style="flex:1">Cancelar</button>
-      <button class="btn bp" ${bloqueado?'disabled style="flex:2;opacity:.4;cursor:not-allowed"':'style="flex:2"'} onclick="nfeConfirmarEmissao()">
-        ${s.enviando?'⏳ Enviando pra SEFAZ...':!c.itensNF.length?'Marque pelo menos 1 item':`✅ Emitir e autorizar — ${fmtBRL(c.total)}`}
+      <button class="btn bp" ${bloqueado?'disabled style="flex:2;opacity:.4;cursor:not-allowed"':'style="flex:2"'} onclick="nfeConfirmarEmissao(1)">
+        ${s.enviando?'⏳ Autorizando na SEFAZ...':!c.itensNF.length?'Marque pelo menos 1 item':`✅ Autorizar na SEFAZ — ${fmtBRL(c.total)}`}
       </button>
     </div>
+    <div style="text-align:center;margin-top:8px"><button onclick="nfeConfirmarEmissao(2)" ${s.enviando?'disabled':''} style="background:none;border:none;color:var(--txd);font-size:11px;text-decoration:underline;cursor:pointer">🧪 Emitir só um teste (homologação, sem valor fiscal)</button></div>
   </div>`;
 }
 
-async function nfeConfirmarEmissao(){
+async function nfeConfirmarEmissao(amb){
   const s = _nfeState;
   if(!s || s.enviando) return;
   const o = s.order;
   const c = nfeCalcular(s);
-  const homolog = s.sefaz && s.sefaz.ambiente === 2;
-  if(!homolog && !confirm(`Emitir NF-e REAL de ${fmtBRL(c.total)} para ${o.clientName}?\n\nDepois de autorizada, só dá pra cancelar em até 24h.`)) return;
+  amb = Number(amb) === 2 ? 2 : 1;
+  const homolog = amb === 2;
+  if(!homolog && !confirm(`Autorizar na SEFAZ a NF-e de ${fmtBRL(c.total)} para ${o.clientName}?\n\nA nota passa a VALER (produção). Depois de autorizada, só dá pra cancelar em até 24h.`)) return;
 
   const v = x => (x === undefined || x === null || String(x).trim() === '') ? undefined : String(x).trim();
   const payload = {
     pedido_id: String(o.orderNum || o.id),
+    ambiente: amb,
     ind_pres: s.indPres,
     desconto: c.desc,
     valor_frete: 0,
